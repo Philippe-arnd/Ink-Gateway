@@ -1,0 +1,23 @@
+# Config.yml — Book Configuration Template
+# Copy this file to: Global Material/Config.yml in each book repository.
+# All fields are required. See comments for valid values.
+
+# AI model to use for narrative generation.
+# Recommended: claude-opus-4-6 for quality, claude-sonnet-4-5-20250929 for speed/cost.
+model: claude-opus-4-6
+
+# Target total length of the finished book in words.
+# Standard novel: 80000–100000. Novella: 40000–60000.
+target_length: 90000
+
+# Total number of chapters planned for the book.
+chapter_count: 30
+
+# Prose structure within each chapter.
+# Options: linear, multi-pov, vignette
+chapter_structure: linear
+
+# Words to generate per nightly session.
+# At 1 page ≈ 300 words, 1500 words ≈ 5 pages per night.
+# Adjust based on desired pace and model cost.
+nightly_output_target: 1500
