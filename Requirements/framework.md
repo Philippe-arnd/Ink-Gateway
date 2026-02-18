@@ -6,49 +6,60 @@ A collaborative AI-driven writing framework hosted on a private VPS. It enables 
 ## 2. Technical Stack & Architecture
 - **Infrastructure:** Self-hosted on OVH VPS via Coolify.
 - **Framework Model:** "The Ink Gateway" acts as the engine/workflow. Each book has its own dedicated GitHub repository.
-- **Editor:** [SilverBullet](https://silverbullet.md/) (Docker-based) at `write.philapps.com`.
-- **Versioning:** GitHub Repositories.
-- **Automation:** OpenClaw Cron + Writing Engine Sub-agents.
+- **Editor:** [SilverBullet](https://silverbullet.md/) (Docker-based) at `write.philapps.com`. Purely file-based — no Git awareness. All Git operations are owned by `engine.py`.
+- **Versioning:** GitHub Repositories (one per book).
+- **Automation:** [OpenClaw](https://docs.openclaw.ai/) — commercial AI agent gateway. One cron job per book, each configured with the book's GitHub repo URL passed as the agent message.
+- **Agent:** `ink-engine` — a named OpenClaw agent whose workspace is the shared volume. Its `AGENTS.md` contains the writing engine system prompt (see Phase 3 in roadmap).
 
 ## 3. Repository Structure (Per Book)
-Each book repository follows this folder structure to organize the collaboration:
+Each book repository follows this folder structure. The shared volume (`/data/ink-gateway/books/<book-name>/`) is the Git working tree, mounted by both SilverBullet and the `ink-engine` agent.
 
-- **`/Global Material/`**: Core reference files.
+- **`/Global Material/`**: Core reference files. Loaded as permanent context every session.
     - `Lore.md`: World-building, rules, and history.
     - `Characters.md`: Detailed character profiles and arcs.
-    - `Outline.md`: Global plot arc and structure.
+    - `Outline.md`: Global plot arc and structure. Completion is detected when all arcs here are fulfilled.
     - `Style_guide.md`: Voice, tone, and specific prose instructions.
-    - `Config.yml`: Book-specific parameters (model, target lengths).
-    - `Summary.md`: Auto-updated narrative summary to combat context decay.
-- **`/Chapters material/`**: The skeletal structure.
-    - One `.md` file per chapter containing the specific chapter's plot goals and status. 
-    - Note: These files are stable; changes from the Human writer here trigger AI re-evaluation of the specific chapter.
+    - `Config.yml`: Book-specific parameters — `model`, `target_length`, `chapter_count`, `chapter_structure`, `nightly_output_target`.
+    - `Summary.md`: Append-only narrative summary. After each session the engine appends a delta summary of the new ~5 pages. Also used as a progress anchor alongside `/Review/current.md`.
+- **`/Chapters material/`**: Skeletal structure — outlines only, no prose.
+    - One `.md` file per chapter with plot goals and status. Human edits here trigger AI re-evaluation of the specific chapter.
 - **`/Review/`**: The active work zone.
-    - Contains the latest drafted pages (IA) and polished prose (the Human writer).
-    - This folder is the primary context for narrative continuity.
-- **`/Changelog/`**: Daily logs.
-    - One page per day detailing AI and human contributions.
-- **`/Current version/`**: The compiled manuscript.
-    - `Full_Book_[Date].md`: A read-only reassembly of all chapters for global navigation.
+    - `current.md`: Single rolling file containing the last ~5 pages (~1500 words). This is the engine's active context window. Overwritten each session with the new output.
+- **`/Changelog/`**: Daily structured logs.
+    - One entry per session: date header, AI word count generated, list of human edits detected, brief narrative summary.
+- **`/Current version/`**: The compiled manuscript and persistent source of truth for all prose.
+    - `Full_Book_[YYYY-MM-DD].md`: The engine reads the previous session's file, appends the new ~5 pages, and writes a new dated file.
 
 ## 4. Operational Workflow
 
-### 4.1 Git Flow "Draft-to-Main"
-1.  **AI Session (Draft Branch):**
-    - Pulls `main`, rebases `draft`.
-    - Reads `/Global Material/` and `/Chapters material/`.
-    - Processes `/Review/` (Drafts new content or executes instructions from the Human writer).
-    - Updates `/Summary/`, `/Changelog/`, and compiles the `/Current version/`.
-    - Pushes to `draft`.
-2.  **Human Session (Review & Merge):**
-    - The Human writer edits in `/Review/` or updates `/Chapters material/`.
-    - The Human writer merges `draft` into `main` to validate the work.
+### 4.1 Nightly Engine Session Sequence
+1. **Pre-flight (Human Override Detection):** Check file timestamps on the shared volume. Any file modified during the current calendar day → `git add . && git commit -m 'chore: human updates' && git push origin main`. Engine adapts its plan based on detected changes.
+2. **Snapshot:** `git tag pre-nightly-$(date +%F)`.
+3. **Branch:** `git checkout draft && git rebase main`.
+4. **Context Loading:** Read all files in `/Global Material/`, `/Chapters material/`, and `/Review/current.md`.
+5. **Progress Anchoring:** Determine continuation point from `/Review/current.md` content + last entry in `Summary.md`.
+6. **Instruction Processing:** Scan `/Review/current.md` for `<!-- Claw: [Instruction] -->` comments → rewrite targeted text → delete comment.
+7. **Narrative Generation:** Generate `nightly_output_target` words adhering to `Style_guide.md`.
+8. **Maintenance (in order):** Overwrite `/Review/current.md` with new pages → append delta to `Summary.md` → write structured `/Changelog/` entry → append to `Full_Book_[YYYY-MM-DD].md`.
+9. **Completion Check:** If `Outline.md` arcs are fulfilled and total word count is within ±10% buffer → write `COMPLETE` marker to repo root → call `openclaw cron delete <job-id>`.
+10. **Sync:** `git push origin main` (human updates + maintenance) and `git push origin draft` (AI prose).
+
+**Implicit approval model:** No explicit approval from the human author is required. Human edits are the signal — they are committed to `main` before generation begins. If no edits are made, the engine treats the previous draft as accepted and continues writing.
+
+**Human authoring flow:** Edit `/Review/current.md` or `/Chapters material/` files in SilverBullet. Insert `<!-- Claw: [Instruction] -->` anywhere in `current.md` to trigger a targeted rewrite on the next nightly run. No merge action required.
 
 ### 4.2 Completion & Buffer Logic
 - **Standard:** 1 page = 300 words.
 - **Buffer:** +/- 10% on chapter and total book length to ensure narrative closure.
-- **Trigger:** Completion is reached when `Outline.md` arcs are fulfilled and length is within the buffer.
+- **Trigger:** Completion is reached when `Outline.md` arcs are fulfilled and total word count is within the buffer.
 
-## 5. Security & Reliability
-- **Git Snapshots:** Mandatory `pre-nightly-YYYY-MM-DD` tags.
-- **Priority:** The Human writer's changes always override AI content in case of merge conflicts.
+## 5. Multi-Book Management
+- Each book has its own GitHub repository and its own OpenClaw cron job.
+- Cron jobs are registered manually: `openclaw cron add --session isolated --agent ink-engine --thinking high --cron "0 2 * * *" --name "Ink: <Title>" --message "Process book: <github-repo-url>"`.
+- The `ink-engine` agent parses the repo URL from its incoming message and passes it to `engine.py`.
+- No central book registry is needed — book registration = cron job creation.
+
+## 6. Security & Reliability
+- **Git Snapshots:** Mandatory `pre-nightly-YYYY-MM-DD` tags before every session.
+- **Priority:** Human writer's changes always override AI content. Human-modified files are committed to `main` before any AI generation begins.
+- **Completion:** Engine auto-disables its own cron job and writes a `COMPLETE` marker when the book is finished.
