@@ -2,14 +2,11 @@
 
 This roadmap outlines the technical path for a fully automated multi-book writing engine using a Shared Volume architecture between SilverBullet and OpenClaw.
 
-## Phase 1: Shared Volume Setup & MVP
-**Goal:** Create the physical link between the Editor and the Engine.
-- [ ] **Volume Definition:** Configure a host directory (`/data/ink-gateway/books`) on the VPS.
-- [ ] **SilverBullet Config:** Update Coolify service to mount the host directory.
-- [ ] **OpenClaw Config:** Update Coolify/Docker config to mount the same host directory into the `ink-engine` agent's workspace.
-- [ ] **Permissions Check:** Ensure both containers can read/write to the shared volume.
-- [ ] **`ink-engine` Agent Setup:** Register the agent via `openclaw agents add ink-engine --workspace /data/ink-gateway`.
-- [ ] **Book Repository Setup:** Initialize the first book repo; check it out to `/data/ink-gateway/books/<book-name>/`.
+## Phase 1: Git Sync Setup & MVP
+**Goal:** Wire SilverBullet and OpenClaw through GitHub. No shared Docker volume — GitHub is the transport.
+- [ ] **SilverBullet Git Sync:** Install git in SilverBullet container, configure HTTPS credentials, enable the built-in Git library with `git.autoSync: 5`.
+- [ ] **`ink-engine` Agent Setup:** Register the agent via `openclaw agents add ink-engine --workspace /data/ink-gateway`. (OpenClaw's existing GitHub token + `gh` CLI handle all git auth.)
+- [ ] **Book Repository Setup:** Initialize the first book repo on GitHub; clone into SilverBullet's space and into OpenClaw's workspace.
 - [ ] **`Config.yml` Template:** Define schema with fields: `model`, `target_length`, `chapter_count`, `chapter_structure`, `nightly_output_target`.
 - [ ] **Orchestrator Script (`engine.py`):**
     - Accept GitHub repo URL as argument (passed from OpenClaw cron message).

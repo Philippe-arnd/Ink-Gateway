@@ -6,13 +6,13 @@ A collaborative AI-driven writing framework hosted on a private VPS. It enables 
 ## 2. Technical Stack & Architecture
 - **Infrastructure:** Self-hosted on OVH VPS via Coolify.
 - **Framework Model:** "The Ink Gateway" acts as the engine/workflow. Each book has its own dedicated GitHub repository.
-- **Editor:** [SilverBullet](https://silverbullet.md/) (Docker-based) at `write.philapps.com`. Purely file-based — no Git awareness. All Git operations are owned by `engine.py`.
-- **Versioning:** GitHub Repositories (one per book).
-- **Automation:** [OpenClaw](https://docs.openclaw.ai/) — commercial AI agent gateway. One cron job per book, each configured with the book's GitHub repo URL passed as the agent message.
-- **Agent:** `ink-engine` — a named OpenClaw agent whose workspace is the shared volume. Its `AGENTS.md` contains the writing engine system prompt (see Phase 3 in roadmap).
+- **Editor:** [SilverBullet](https://silverbullet.md/) (Docker-based) at `write.philapps.com`. Uses the built-in Git library (`git.autoSync`) to commit and push human edits to GitHub automatically. No shared volume with OpenClaw — GitHub is the transport.
+- **Versioning:** GitHub Repositories (one per book). All Git operations are owned by `engine.py` (OpenClaw side) and SilverBullet's git library (editor side).
+- **Automation:** [OpenClaw](https://docs.openclaw.ai/) — commercial AI agent gateway. One cron job per book, each configured with the book's GitHub repo URL passed as the agent message. OpenClaw uses its existing GitHub token and `gh` CLI for all git operations.
+- **Agent:** `ink-engine` — a named OpenClaw agent with workspace at `/data/ink-gateway`. Its `AGENTS.md` contains the writing engine system prompt (see Phase 3 in roadmap).
 
 ## 3. Repository Structure (Per Book)
-Each book repository follows this folder structure. The shared volume (`/data/ink-gateway/books/<book-name>/`) is the Git working tree, mounted by both SilverBullet and the `ink-engine` agent.
+Each book repository follows this folder structure. The GitHub repository is the single source of truth. SilverBullet clones it into its own container space; the `ink-engine` agent clones it into `/data/ink-gateway/books/<book-name>/`.
 
 - **`/Global Material/`**: Core reference files. Loaded as permanent context every session.
     - `Lore.md`: World-building, rules, and history.

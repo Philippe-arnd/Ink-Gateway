@@ -1,6 +1,3 @@
-# Local infrastructure docs — not for version control
-deploy/
-
 # VS Code workspace file
 *.code-workspace
 

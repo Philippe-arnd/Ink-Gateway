@@ -4,15 +4,15 @@ A collaborative AI-driven framework for writing Science Fiction and Fantasy nove
 
 ## How It Works
 
-Three components share a Docker volume on a self-hosted VPS:
+Three components sync through GitHub on a self-hosted VPS:
 
 | Component | Role |
 |---|---|
-| **SilverBullet** (`write.philapps.com`) | Human author's markdown editor. Purely file-based — zero Git awareness. |
-| **Shared Volume** (`/data/ink-gateway/books/`) | The Git working tree for each book. Both containers mount the same host directory. |
-| **OpenClaw `ink-engine` agent** | Runs nightly at 02:00 UTC. Reads context, generates ~5 pages of prose, handles all Git operations. |
+| **SilverBullet** (`write.philapps.com`) | Human author's markdown editor. Uses the built-in Git library to auto-commit and push edits to GitHub. |
+| **GitHub** | Single source of truth. The sync layer between SilverBullet and the engine. |
+| **OpenClaw `ink-engine` agent** | Runs nightly at 02:00 UTC. Pulls from GitHub, reads context, generates ~5 pages of prose, pushes all Git operations. |
 
-Each book is an independent GitHub repository checked out onto the shared volume. The human author edits files in SilverBullet; the engine detects changes, commits them, then continues writing.
+Each book is an independent GitHub repository. SilverBullet auto-syncs human edits throughout the day; the engine pulls them at 02:00 UTC, generates new content, and pushes back. SilverBullet's next sync makes the AI output visible in the editor.
 
 **Implicit approval:** If no files were modified today, the previous draft is treated as accepted and the engine keeps writing. Human edits are the only signal needed.
 
@@ -68,7 +68,7 @@ No central book registry — each book is simply a cron job. Deleting the cron j
 
 - Edit `/Review/current.md` or `/Chapters material/` files directly in SilverBullet.
 - Insert `<!-- Claw: [Instruction] -->` anywhere in `current.md` to request a targeted rewrite on the next nightly run.
-- The engine detects and commits your edits before generating new content — no Git action required.
+- SilverBullet's git auto-sync commits and pushes your edits automatically (every few minutes). No manual Git action required.
 
 ## API Cost Reference
 
@@ -84,7 +84,7 @@ See `Requirements/cost-analysis.md` for the full breakdown.
 
 | Phase | Status | Description |
 |---|---|---|
-| **Phase 1** | Planned | Shared volume wiring, `ink-engine` agent setup, `engine.py` scaffold |
+| **Phase 1** | Planned | SilverBullet git sync setup, `ink-engine` agent registration, `engine.py` scaffold |
 | **Phase 2** | Planned | Full nightly automation (cron, change detection, manuscript compiler, completion handler) |
 | **Phase 3** | Planned | Author the `ink-engine` `AGENTS.md` system prompt |
 | **Phase 4** | Planned | Static site (`books.philapps.com`), validation layer |

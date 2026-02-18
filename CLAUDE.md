@@ -10,13 +10,15 @@ The project is currently in the **specification phase**. All authoritative docum
 
 ## Architecture
 
-Three components connected via a shared Docker volume on a self-hosted OVH VPS (managed via Coolify):
+Three components synced through GitHub on a self-hosted OVH VPS (managed via Coolify):
 
 | Component | Role |
 |---|---|
-| **SilverBullet** (`write.philapps.com`) | Human author's markdown editor. Purely file-based — zero Git awareness. |
-| **Shared Volume** (`/data/ink-gateway/books/`) | The Git working tree for each book repo. Both containers mount the same host directory. |
-| **OpenClaw `ink-engine` agent** | Runs nightly, reads the volume, generates prose, handles all Git operations. |
+| **SilverBullet** (`write.philapps.com`) | Human author's markdown editor. Uses the built-in Git library (`git.autoSync`) to commit and push edits to GitHub automatically. |
+| **GitHub** | Single source of truth and sync layer between editor and engine. |
+| **OpenClaw `ink-engine` agent** | Runs nightly, pulls from GitHub, generates prose, pushes all Git operations back. |
+
+No shared Docker volume. GitHub is the transport between SilverBullet and OpenClaw. OpenClaw already has a GitHub token and `gh` CLI configured — `engine.py` uses HTTPS URLs and the existing token for all git operations.
 
 **OpenClaw** ([docs.openclaw.ai](https://docs.openclaw.ai)) is a commercial self-hosted AI agent gateway. The `ink-engine` is a named agent registered with `openclaw agents add ink-engine --workspace /data/ink-gateway`. Each book gets its own isolated OpenClaw cron job — no central book registry needed.
 
@@ -77,7 +79,7 @@ The `ink-engine` agent parses the repo URL from the message and passes it to `en
 
 ## Implementation Roadmap Summary
 
-- **Phase 1:** Shared volume wiring, `ink-engine` agent setup, `engine.py` scaffold (Git ops + payload builder)
+- **Phase 1:** SilverBullet git sync setup, `ink-engine` agent registration, `engine.py` scaffold (Git ops + payload builder)
 - **Phase 2:** Full nightly automation (cron, change detection, rolling `current.md`, append summary, manuscript compiler, completion handler)
 - **Phase 3:** Author the `ink-engine` `AGENTS.md` system prompt
 - **Phase 4:** Static site for `books.philapps.com`, validation layer
