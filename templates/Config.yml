@@ -6,6 +6,9 @@
 # level when registering the cron job (e.g., via --model or agent settings).
 # All AI credentials are managed by the agent gateway.
 
+# Language the engine must write in (e.g. English, French, Spanish, German).
+language: English
+
 # Target total length of the finished book in words.
 # Standard novel: 80000–100000. Novella: 40000–60000.
 target_length: 90000

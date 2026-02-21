@@ -11,6 +11,13 @@ const CHARACTERS_MD: &str = include_str!("../templates/Characters.md");
 const LORE_MD: &str = include_str!("../templates/Lore.md");
 const CHAPTER_01_MD: &str = include_str!("../templates/Chapter_01.md");
 const CURRENT_MD: &str = include_str!("../templates/current.md");
+const AGENTS_MD: &str = include_str!("../templates/AGENTS.md");
+
+#[derive(Serialize)]
+pub struct Question {
+    pub question: &'static str,
+    pub target_file: &'static str,
+}
 
 #[derive(Serialize)]
 pub struct InitPayload {
@@ -18,6 +25,7 @@ pub struct InitPayload {
     pub title: String,
     pub author: String,
     pub files_created: Vec<String>,
+    pub questions: Vec<Question>,
 }
 
 fn fill(template: &str, title: &str, author: &str) -> String {
@@ -101,6 +109,9 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
         &mut files_created,
     )?;
 
+    // AGENTS.md — standalone engine instructions at repo root
+    write_file("AGENTS.md", AGENTS_MD, &mut files_created)?;
+
     // Changelog/.gitkeep — keeps the empty directory tracked by git
     write_file("Changelog/.gitkeep", "", &mut files_created)?;
 
@@ -110,11 +121,45 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
     // Git operations
     git_commit_and_push(repo_path)?;
 
+    let questions = vec![
+        Question {
+            question: "What language should the engine write in? \
+                       (e.g. English, French, Spanish, German, Italian — use the full language name)",
+            target_file: "Global Material/Config.yml",
+        },
+        Question {
+            question: "What is the narrative voice, tone, and prose style for this book? \
+                       Describe the narrator, sentence rhythm, vocabulary level, and emotional register.",
+            target_file: "Global Material/Soul.md",
+        },
+        Question {
+            question: "What is the full plot arc — beginning, middle, and end? \
+                       Include the central conflict, major turning points, and resolution.",
+            target_file: "Global Material/Outline.md",
+        },
+        Question {
+            question: "Who are the main characters? For each: name, personality, motivation, \
+                       key relationships, and arc across the book.",
+            target_file: "Global Material/Characters.md",
+        },
+        Question {
+            question: "Describe the world: its setting, history, geography, societies, \
+                       and any rules or lore the engine must respect.",
+            target_file: "Global Material/Lore.md",
+        },
+        Question {
+            question: "What should happen in Chapter 1? List the key beats, scenes, \
+                       and what the reader should feel by the end of it.",
+            target_file: "Chapters material/Chapter_01.md",
+        },
+    ];
+
     Ok(InitPayload {
         status: "initialized",
         title: title.to_string(),
         author: author.to_string(),
         files_created,
+        questions,
     })
 }
 

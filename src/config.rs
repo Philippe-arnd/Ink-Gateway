@@ -2,6 +2,10 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
+fn default_language() -> String {
+    "English".to_string()
+}
+
 fn default_summary_context_entries() -> usize {
     5
 }
@@ -17,6 +21,8 @@ fn default_current_chapter() -> u32 {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Config {
+    #[serde(default = "default_language")]
+    pub language: String,
     pub target_length: u32,
     pub chapter_count: u32,
     pub chapter_structure: String,
