@@ -4,7 +4,7 @@
 
 # Ink Gateway
 
-A collaborative AI-driven framework for writing Science Fiction and Fantasy novels. The engine runs writing sessions autonomously on any schedule, while the human author edits in a browser-based markdown editor — no Git knowledge required.
+A collaborative AI-driven framework for writing books and novels. The engine runs writing sessions autonomously on any schedule, while the human author edits in a browser-based markdown editor — no Git knowledge required.
 
 ## How It Works
 

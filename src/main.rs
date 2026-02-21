@@ -1,9 +1,11 @@
 mod config;
 mod context;
 mod git;
+mod maintenance;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::io::Read;
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -21,12 +23,18 @@ enum Commands {
         /// Path to the book repository
         repo_path: PathBuf,
     },
-    /// Close a writing session: write prose, update files, push (stub)
+    /// Close a writing session: read prose from stdin, write files, push
     SessionClose {
         /// Path to the book repository
         repo_path: PathBuf,
+        /// One-paragraph narrative summary of this session (appended to Summary.md and Changelog)
+        #[arg(long)]
+        summary: Option<String>,
+        /// Human-edited files from the session-open payload (repeatable)
+        #[arg(long = "human-edit")]
+        human_edits: Vec<String>,
     },
-    /// Mark book as complete and perform final push (stub)
+    /// Mark book as complete and perform final push
     Complete {
         /// Path to the book repository
         repo_path: PathBuf,
@@ -44,24 +52,27 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::SessionOpen { repo_path } => {
-            run_session_open(&repo_path)?;
+            let payload = context::session_open(&repo_path)?;
+            println!("{}", serde_json::to_string_pretty(&payload)?);
         }
-        Commands::SessionClose { repo_path: _ } => {
-            eprintln!("session-close is not yet implemented");
-            std::process::exit(1);
+        Commands::SessionClose { repo_path, summary, human_edits } => {
+            let mut prose = String::new();
+            std::io::stdin()
+                .read_to_string(&mut prose)
+                .context("Failed to read prose from stdin")?;
+            let result = maintenance::close_session(
+                &repo_path,
+                &prose,
+                summary.as_deref(),
+                &human_edits,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        Commands::Complete { repo_path: _ } => {
-            eprintln!("complete is not yet implemented");
-            std::process::exit(1);
+        Commands::Complete { repo_path } => {
+            let result = maintenance::complete_session(&repo_path)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
 
-    Ok(())
-}
-
-fn run_session_open(repo_path: &PathBuf) -> Result<()> {
-    let payload = context::session_open(repo_path)?;
-    let json = serde_json::to_string_pretty(&payload)?;
-    println!("{}", json);
     Ok(())
 }
