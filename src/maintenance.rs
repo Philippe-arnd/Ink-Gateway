@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use dialoguer;
 use chrono::Local;
 use serde::Serialize;
 use std::path::Path;
@@ -205,4 +206,70 @@ pub fn complete_session(repo: &Path) -> Result<CompletePayload> {
         status: "complete",
         total_word_count,
     })
+}
+
+// ─── rollback ─────────────────────────────────────────────────────────────────
+
+/// Revert main (and draft) to the snapshot tag created at the start of the
+/// last writing session, undoing all prose generated in that session.
+/// The session's changelog entry is automatically gone after the hard reset.
+pub fn rollback_session(repo_path: &Path) -> Result<()> {
+    // Collect all ink-* tags and sort reverse-chronologically (YYYY-MM-DD-HH-MM
+    // format is lexicographically ordered, so reverse sort = most recent first).
+    let raw = git::run_git(repo_path, &["tag", "-l", "ink-*"])?;
+    let mut tags: Vec<&str> = raw
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    tags.sort_by(|a, b| b.cmp(a));
+
+    let target = tags
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No ink-* snapshot tags found — nothing to roll back"))?;
+
+    println!("\n  Rollback target : {}", target);
+    if let Some(prev) = tags.get(1) {
+        println!("  Previous snapshot: {}", prev);
+    }
+    println!();
+    println!("  This will permanently remove the last session's prose,");
+    println!("  Summary.md entry, and Changelog entry, then force-push.");
+
+    let confirmed = dialoguer::Confirm::new()
+        .with_prompt("\n  Confirm rollback")
+        .default(false)
+        .interact()
+        .with_context(|| "Failed to read confirmation")?;
+
+    if !confirmed {
+        println!("  Rollback cancelled.");
+        return Ok(());
+    }
+
+    // Ensure we're on main before resetting
+    git::run_git(repo_path, &["checkout", "main"])
+        .with_context(|| "Failed to checkout main")?;
+
+    // Hard reset main to the snapshot tag
+    git::run_git(repo_path, &["reset", "--hard", target])
+        .with_context(|| format!("Failed to reset to {}", target))?;
+
+    // Force-push main
+    git::run_git(repo_path, &["push", "--force", "origin", "main"])
+        .with_context(|| "Failed to force-push main")?;
+
+    // Reset draft to main if it exists
+    if git::run_git(repo_path, &["show-ref", "--verify", "refs/heads/draft"]).is_ok() {
+        git::run_git(repo_path, &["branch", "-f", "draft", "main"])
+            .with_context(|| "Failed to reset draft branch")?;
+        git::run_git(repo_path, &["push", "--force", "origin", "draft"])
+            .with_context(|| "Failed to force-push draft")?;
+    }
+
+    println!("\n  Rolled back to {}.", target);
+    println!("  The last session's prose has been removed.");
+    println!("  Run the next session normally when ready.\n");
+
+    Ok(())
 }

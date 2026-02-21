@@ -40,6 +40,16 @@ enum Commands {
         /// Path to the book repository
         repo_path: PathBuf,
     },
+    /// Wipe all book content and allow re-running init (requires confirmation)
+    Reset {
+        /// Path to the book repository
+        repo_path: PathBuf,
+    },
+    /// Revert to the state before the last writing session (requires confirmation)
+    Rollback {
+        /// Path to the book repository
+        repo_path: PathBuf,
+    },
     /// Scaffold a new book repository with all required files and directories
     Init {
         /// Path to the book repository (must be an existing git repo)
@@ -83,6 +93,12 @@ fn main() -> Result<()> {
         Commands::Complete { repo_path } => {
             let result = maintenance::complete_session(&repo_path)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Commands::Reset { repo_path } => {
+            init::run_reset(&repo_path)?;
+        }
+        Commands::Rollback { repo_path } => {
+            maintenance::rollback_session(&repo_path)?;
         }
         Commands::Init { repo_path, title, author } => {
             let result = init::run_init(&repo_path, &title, &author)?;

@@ -163,6 +163,90 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
     })
 }
 
+// ─── reset ────────────────────────────────────────────────────────────────────
+
+/// Wipe all book content so the repository can be re-initialized with `init`.
+/// The user must type the repository directory name to confirm — this is a
+/// destructive, irreversible operation.
+pub fn run_reset(repo_path: &Path) -> Result<()> {
+    let repo_name = repo_path
+        .canonicalize()
+        .unwrap_or_else(|_| repo_path.to_path_buf())
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("this-repository")
+        .to_string();
+
+    println!("\n  ⚠  Reset will permanently delete all book content in «{}».", repo_name);
+    println!("  The git history is preserved, but all files will be removed.");
+    println!("  You can re-run `ink-cli init` afterwards to start fresh.\n");
+    println!("  To confirm, type the repository name:\n");
+
+    let input: String = dialoguer::Input::<String>::new()
+        .with_prompt(format!("  Type «{}» to confirm", repo_name))
+        .interact_text()
+        .with_context(|| "Failed to read confirmation input")?;
+
+    if input.trim() != repo_name {
+        println!("\n  Name does not match — reset cancelled.\n");
+        return Ok(());
+    }
+
+    println!("\n  Removing book content…");
+
+    // Remove all tracked content directories and files in one git rm call.
+    // --ignore-unmatch silences errors for files that don't exist.
+    let _ = Command::new("git")
+        .args([
+            "rm", "-rf", "--ignore-unmatch",
+            "Global Material/",
+            "Chapters material/",
+            "Review/",
+            "Changelog/",
+            "Current version/",
+            "AGENTS.md",
+            "COMPLETE",
+            ".ink-running",
+            ".ink-kill",
+        ])
+        .current_dir(repo_path)
+        .status();
+
+    // Re-create .gitkeep placeholders so the directories exist for the next init
+    for dir in &["Changelog", "Chapters material", "Review", "Current version"] {
+        let dir_path = repo_path.join(dir);
+        fs::create_dir_all(&dir_path)?;
+        fs::write(dir_path.join(".gitkeep"), "")?;
+    }
+
+    let run = |args: &[&str]| -> Result<()> {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo_path)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("git {} failed", args.join(" "));
+        }
+        Ok(())
+    };
+
+    run(&["add", "-A"])?;
+    run(&["commit", "-m", "reset: wipe book content for re-initialization"])?;
+
+    let push = Command::new("git")
+        .args(["push", "origin", "main"])
+        .current_dir(repo_path)
+        .status()?;
+    if !push.success() {
+        tracing::warn!("git push skipped — no remote configured");
+    }
+
+    println!("\n  Reset complete.");
+    println!("  Run `ink-cli init <repo-path> --title \"...\" --author \"...\"` to start fresh.\n");
+
+    Ok(())
+}
+
 fn git_commit_and_push(repo_path: &Path) -> Result<()> {
     let run = |args: &[&str]| -> Result<()> {
         let status = Command::new("git")
