@@ -57,20 +57,31 @@ After init, the JSON response includes a `questions` array. Each entry has `ques
 
 Present each question to the human author in order, one at a time. Once you have all answers:
 
-1. Write answers into their `target_file`. Multiple questions may share a file — combine them as structured markdown:
-   - **`Global Material/Config.yml`** — update only the `language:` field (replace the existing value on that line). Do not overwrite the rest of the file.
-   - **`Global Material/Soul.md`** — write as `# Soul\n\n## Genre & Tone\n\n{q_genre}\n\n## Narrator & Perspective\n\n{q_narrator}\n`
-   - **`Global Material/Characters.md`** — write as `# Characters\n\n## Protagonist\n\n{q_protag}\n\n## Antagonist / Obstacle\n\n{q_antag}\n`
-   - **`Global Material/Outline.md`** — write as `# Outline\n\n## Opening\n\n{q_open}\n\n## Midpoint\n\n{q_mid}\n\n## Ending\n\n{q_end}\n`
-   - **`Global Material/Lore.md`** — write as `# Lore\n\n## Setting\n\n{q_setting}\n`
-   - **`Chapters material/Chapter_01.md`** — write as `# Chapter 1\n\n## Beats\n\n{q_ch1}\n`
-2. Commit and push:
-   ```bash
-   git -C <repo-path> add -A
-   git -C <repo-path> commit -m "init: populate global material from author Q&A"
-   git -C <repo-path> push origin main
-   ```
-3. Stop. Notify the author the book is ready — they can review `Global Material/` in their editor and start the first writing session when satisfied.
+**Extrapolate before writing.** The author gave 1–2 sentence answers — do not copy them verbatim. Use them as seed material and expand each into rich, detailed content:
+
+- **`Global Material/Soul.md`** — write a full style guide (2–4 paragraphs): narrator voice, sentence rhythm, vocabulary level, emotional register, what to avoid.
+- **`Global Material/Characters.md`** — write a full character sheet for each character: appearance hints, personality, motivation, internal conflict, key relationships, arc across the book.
+- **`Global Material/Outline.md`** — write a structured plot outline with opening act, rising tension, midpoint reversal, dark night of the soul, climax, and resolution. Include the central stakes and thematic undercurrent.
+- **`Global Material/Lore.md`** — write a world-building reference: setting atmosphere, history, social structures, rules of the world, sensory details the prose should reflect.
+- **`Chapters material/Chapter_01.md`** — write detailed scene beats for Chapter 1: what happens, in what order, what the reader should feel, what's established, what's withheld.
+
+Write each expanded file using the structure below:
+
+1. **`Global Material/Config.yml`** — update only the `language:` field. Do not overwrite the rest.
+2. **`Global Material/Soul.md`** — `# Soul\n\n## Genre & Tone\n\n...\n\n## Narrator & Perspective\n\n...\n`
+3. **`Global Material/Characters.md`** — `# Characters\n\n## Protagonist\n\n...\n\n## Antagonist / Obstacle\n\n...\n`
+4. **`Global Material/Outline.md`** — `# Outline\n\n## Opening\n\n...\n\n## Midpoint\n\n...\n\n## Ending\n\n...\n`
+5. **`Global Material/Lore.md`** — `# Lore\n\n## Setting\n\n...\n`
+6. **`Chapters material/Chapter_01.md`** — `# Chapter 1\n\n## Beats\n\n...\n`
+
+Then commit and push:
+```bash
+git -C <repo-path> add -A
+git -C <repo-path> commit -m "init: populate global material from author Q&A"
+git -C <repo-path> push origin main
+```
+
+Stop. Notify the author the book is ready — they can review `Global Material/` in their editor and start the first writing session when satisfied.
 
 **If present — run a writing session** following §Session Flow below.
 
@@ -183,10 +194,26 @@ The `<!-- INK: ... -->` comments are already stripped from `current_review.conte
 
 ---
 
+## Prose Markup — New Content and Reworked Passages
+
+`session-close` automatically wraps everything you send via stdin in `<!-- INK:NEW:START -->` / `<!-- INK:NEW:END -->` markers in `Full_Book.md`. This lets the author see at a glance what was added in this session.
+
+If you rewrote a passage in response to an `<!-- INK: ... -->` instruction, wrap only that reworked section in your output:
+
+```
+<!-- INK:REWORKED:START -->
+{revised text, replacing the passage where the INK comment appeared}
+<!-- INK:REWORKED:END -->
+```
+
+Place reworked blocks before the new continuation prose. The author's markdown editor will render them visually distinct. Do **not** add `INK:NEW` tags yourself — `session-close` adds them around everything.
+
+---
+
 ## Calling session_close
 
 Pass:
-- The generated prose on **stdin**
+- The generated prose on **stdin** (reworked blocks first if any, then new continuation prose)
 - `--summary` — a single paragraph summarizing what happened narratively this session (e.g., events, decisions, revelations). This is appended to `Summary.md` and the Changelog.
 - `--human-edit <file>` — repeat for each file in `human_edits` from the payload
 

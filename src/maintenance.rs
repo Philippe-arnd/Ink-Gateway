@@ -120,7 +120,12 @@ pub fn close_session(
         book_content.push('\n');
     }
     book_content.push('\n');
+    book_content.push_str("<!-- INK:NEW:START -->\n");
     book_content.push_str(prose.trim_start());
+    if !prose.trim_end().is_empty() && !prose.ends_with('\n') {
+        book_content.push('\n');
+    }
+    book_content.push_str("<!-- INK:NEW:END -->\n");
     std::fs::write(&book_path, &book_content)
         .with_context(|| "Failed to write Full_Book.md")?;
 
