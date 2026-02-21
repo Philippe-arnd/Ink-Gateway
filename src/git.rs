@@ -19,7 +19,9 @@ pub fn run_git(repo: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
-pub fn preflight_sync(repo: &Path) -> Result<()> {
+/// Fetch remote state and switch to main. Does NOT merge — call
+/// `merge_ff_origin_main` separately after human edits are committed.
+pub fn preflight_fetch_and_checkout(repo: &Path) -> Result<()> {
     info!("Fetching origin...");
     run_git(repo, &["fetch", "origin"])
         .with_context(|| "Failed to fetch from origin")?;
@@ -28,11 +30,30 @@ pub fn preflight_sync(repo: &Path) -> Result<()> {
     run_git(repo, &["checkout", "main"])
         .with_context(|| "Failed to checkout main")?;
 
+    Ok(())
+}
+
+/// Fast-forward local main onto origin/main. Call this AFTER human edits
+/// are committed so the merge cannot overwrite uncommitted local changes.
+pub fn merge_ff_origin_main(repo: &Path) -> Result<()> {
     info!("Fast-forward merging origin/main...");
     run_git(repo, &["merge", "--ff-only", "origin/main"])
         .with_context(|| "Failed to merge origin/main (non-fast-forward?)")?;
-
     Ok(())
+}
+
+/// Returns files that differ between the local working tree and origin/main.
+/// This catches IDE saves that were never committed/pushed — the diff between
+/// what the user has locally and what the remote last committed.
+pub fn collect_diffs_vs_remote(repo: &Path) -> Result<Vec<String>> {
+    match run_git(repo, &["diff", "origin/main", "--name-only"]) {
+        Ok(output) => Ok(output
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()),
+        Err(_) => Ok(vec![]), // origin/main may not exist on a fresh local repo
+    }
 }
 
 pub fn collect_modified_files(repo: &Path) -> Result<Vec<String>> {
@@ -65,9 +86,8 @@ pub fn commit_human_edits(repo: &Path, files: &[String]) -> Result<()> {
     run_git(repo, &["commit", "-m", "chore: human updates"])
         .with_context(|| "Failed to commit human edits")?;
 
-    run_git(repo, &["push", "origin", "main"])
-        .with_context(|| "Failed to push human edits")?;
-
+    // No push here — push_tags (called later in session_open) carries this
+    // commit to origin together with the snapshot tag in a single push.
     Ok(())
 }
 

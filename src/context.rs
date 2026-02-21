@@ -263,9 +263,11 @@ pub fn load_word_count(repo: &Path, target: u32) -> Result<WordCount> {
 // ─── Main orchestration ───────────────────────────────────────────────────────
 
 pub fn session_open(repo: &Path) -> Result<SessionPayload> {
-    // 1. Preflight git sync
-    info!("Step 1: preflight sync");
-    git::preflight_sync(repo)?;
+    // 1. Fetch remote state and switch to main — do NOT merge yet so that
+    //    uncommitted local edits (e.g. INK instructions saved in an IDE) are
+    //    detected and committed before origin/main can overwrite them.
+    info!("Step 1: fetch and checkout main");
+    git::preflight_fetch_and_checkout(repo)?;
 
     // 2. Check for kill file — must happen before any git writes
     let kill_requested = kill_path(repo).exists();
@@ -305,15 +307,32 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
     info!("Step 3: loading config");
     let config = Config::load(repo)?;
 
-    // 4. Collect modified files BEFORE committing (reflects human changes)
-    info!("Step 4: collecting human edits");
-    let human_edits = git::collect_modified_files(repo)?;
+    // 4. Collect human edits BEFORE merging with origin so that local
+    //    uncommitted changes (IDE saves, INK instructions, etc.) are captured
+    //    and committed before the ff-merge can overwrite them.
+    //
+    //    Two complementary methods — union:
+    //    a) git status --short   → uncommitted working-tree changes vs HEAD
+    //    b) git diff origin/main → ALL diffs between local tree and remote,
+    //       catching edits made when local HEAD was already behind origin
+    info!("Step 4: collecting human edits (local working tree + diff vs origin)");
+    let mut human_edits = git::collect_modified_files(repo)?;
+    for f in git::collect_diffs_vs_remote(repo)? {
+        if !human_edits.contains(&f) {
+            human_edits.push(f);
+        }
+    }
 
-    // 5. Commit human edits if any
+    // 5. Commit human edits locally (no push — push_tags handles that below)
     if !human_edits.is_empty() {
         info!("Step 5: committing {} human edit(s)", human_edits.len());
         git::commit_human_edits(repo, &human_edits)?;
     }
+
+    // 5b. Now safe to merge: local changes are committed, so the ff-merge
+    //     cannot overwrite them.
+    info!("Step 5b: fast-forward merging origin/main");
+    git::merge_ff_origin_main(repo)?;
 
     // 6. Create snapshot tag
     info!("Step 6: creating snapshot tag");
