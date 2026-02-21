@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Ink Gateway** is a collaborative AI-driven fiction writing framework. It orchestrates writing sessions between a human author and an AI agent (`ink-engine`) for Science Fiction and Fantasy novels. This repository is the **framework definition** — `ink-cli` (the Rust binary) lives here. Each book has its own separate GitHub repository.
+**Ink Gateway** is a collaborative AI-driven fiction writing framework. It orchestrates writing sessions between a human author and an AI agent (`ink-engine`) for books and novels. This repository is the **framework definition** — `ink-cli` (the Rust binary) lives here. Each book has its own separate GitHub repository.
 
 ## Architecture
 
@@ -79,7 +79,7 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 
 ## Implementation Language & Key Files
 
-- **`ink-cli`** — Rust binary. Three subcommands: `session-open`, `session-close`, `complete`.
+- **`ink-cli`** — Rust binary. Four subcommands: `init`, `session-open`, `session-close`, `complete`.
 - **`Cargo.toml`** — dependency manifest.
 - **`ink-engine` AGENTS.md** (Phase 3) — Writing engine system prompt + inline tool definitions.
 
@@ -87,6 +87,7 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 
 | Subcommand | Phase | Responsibility | Output |
 |---|---|---|---|
+| `init <repo-path>` | Setup | Scaffold all dirs + seed files → commit + push | JSON: `status`, `files_created` |
 | `session-open <repo-path>` | Start | git-setup + read-context → full payload | JSON payload |
 | `session-close <repo-path>` | End | stdin prose → write + maintain + push | JSON: word counts + `completion_ready` |
 | `complete <repo-path>` | Finish | Write `COMPLETE` + final push | JSON: `{ "status": "complete" }` |
@@ -96,10 +97,12 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 ```
 src/
   main.rs          ← clap router + top-level error handling
+  init.rs          ← init subcommand: scaffold dirs, write seed files, git commit
   git.rs           ← git operations (pre-flight, snapshot, branch, push)
   context.rs       ← context aggregation, INK instruction extraction, JSON output
   maintenance.rs   ← summary / changelog / Full_Book compiler
   config.rs        ← Config.yml parsing (serde_yaml)
+templates/         ← seed files embedded via include_str! (Soul, Outline, Characters, Lore, etc.)
 Cargo.toml
 ```
 
@@ -118,9 +121,9 @@ Cargo.toml
 
 ## Implementation Roadmap Summary
 
-- **Phase 1:** Editor git sync, agent registration, `session-open` subcommand
-- **Phase 2:** `session-close` + `complete` subcommands, cron registration
-- **Phase 3:** Author `AGENTS.md` with inline tool definitions
+- **Phase 1:** ✅ Editor git sync, agent registration, `session-open` subcommand
+- **Phase 2:** ✅ `session-close` + `complete` subcommands, `init` subcommand + templates, cron registration
+- **Phase 3:** `ink-engine` AGENTS.md with inline tool definitions
 - **Phase 4:** Static site, validation layer
 
 See `Requirements/roadmap.md` for detailed task checklists.

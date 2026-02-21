@@ -53,7 +53,17 @@ COMPLETE               # Written by engine when book is finished (triggers cron 
 5. **Close** — `session-close` (prose via stdin): write `current.md`, append `Summary.md`, write `Changelog/`, append `Full_Book.md`, push
 6. **Complete (conditional)** — If word count within ±10% of target AND arcs fulfilled → write `COMPLETE` → cron self-deleted
 
-## Registering a New Book
+## Starting a New Book
+
+**1. Scaffold the repository** — run once in any existing git repo:
+
+```bash
+ink-cli init /path/to/book-repo --title "My Book" --author "Jane Doe"
+```
+
+This creates the full directory structure, populates all seed files with your title and author, and commits everything to `main`. Edit the files in `Global Material/` before the first writing session.
+
+**2. Register the cron job** — one per book on the agent gateway:
 
 ```bash
 agent-gateway cron add \
@@ -67,6 +77,68 @@ agent-gateway cron add \
 ```
 
 The `--model` flag (or equivalent) is where the AI model is chosen — not in the book repo. No central book registry — each book is simply a cron job.
+
+## For AI Agents
+
+This section is the entry point for any AI model given a book repository URL.
+
+### Step 1 — Clone or sync the repository
+
+```bash
+# First time seeing this repo:
+git clone <repo-url> /data/ink-gateway/books/<repo-name>
+
+# Already cloned:
+git -C /data/ink-gateway/books/<repo-name> pull origin main
+```
+
+### Step 2 — Determine what to do
+
+Check whether `Global Material/Config.yml` exists in the local clone.
+
+| `Global Material/Config.yml` | Action |
+|---|---|
+| **Absent** | Repository is empty — run `ink-cli init` (see below) |
+| **Present** | Repository is ready — run a writing session (see `AGENTS.md`) |
+
+### First-time setup — `ink-cli init`
+
+Run this exactly once per book, before any writing session:
+
+```bash
+ink-cli init /data/ink-gateway/books/<repo-name> \
+  --title "<Book Title>" \
+  --author "<Author Name>"
+```
+
+Derive `--title` from the repository name (replace hyphens and underscores with spaces, apply title case). Derive `--author` from the GitHub username in the URL or from the triggering message if it specifies one.
+
+On success you will receive:
+
+```json
+{
+  "status": "initialized",
+  "title": "Book Title",
+  "author": "Author Name",
+  "files_created": ["Global Material/Config.yml", "..."]
+}
+```
+
+**After init, stop.** Do not start a writing session immediately. The human author must fill in `Global Material/` (Soul.md, Outline.md, Characters.md, Lore.md) and `Chapters material/Chapter_01.md` before the first session is meaningful. Notify them that the scaffold is ready and they can start editing.
+
+### Ongoing writing — session loop
+
+If `Config.yml` already exists, follow the session flow defined in `AGENTS.md`:
+
+```
+session_open → (abort checks) → generate → session_close → (complete if done)
+```
+
+### Error handling
+
+If `ink-cli` returns `"status": "error"` or exits with a non-zero code, stop immediately. Report the full error output to the author. Do not retry; do not continue to the next step.
+
+---
 
 ## Human Authoring Flow
 
@@ -88,9 +160,9 @@ See `Requirements/cost-analysis.md` for the full breakdown.
 
 | Phase | Status | Description |
 |---|---|---|
-| **Phase 1** | Planned | Editor git sync, agent registration, `session-open` Rust scaffold |
-| **Phase 2** | Planned | `session-close` + `complete`, full session automation |
-| **Phase 3** | Planned | Author `AGENTS.md` with inline tool definitions |
+| **Phase 1** | ✅ Complete | Editor git sync, agent registration, `session-open` subcommand |
+| **Phase 2** | ✅ Complete | `session-close` + `complete`, `init` + book templates, full session automation |
+| **Phase 3** | Planned | `ink-engine` AGENTS.md with inline tool definitions |
 | **Phase 4** | Planned | Static site, validation layer |
 
 See `Requirements/roadmap.md` for detailed task checklists and `Requirements/framework.md` for full architecture documentation.

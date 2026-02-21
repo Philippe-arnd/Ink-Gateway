@@ -29,6 +29,8 @@ Shell: ink-cli complete $repo_path
 
 The `repo_path` is the local clone of the book repository. The URL is provided in the triggering message; clone it if absent or pull if present before calling any tool.
 
+> **First session on a new repo?** If `Global Material/Config.yml` does not exist, the repository needs to be initialized before any session can run. See the **For AI Agents** section in `README.md` for the initialization flow. Do not call `session_open` on an uninitialized repository.
+
 ---
 
 ## Session Flow
