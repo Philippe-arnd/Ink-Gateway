@@ -29,7 +29,7 @@ Each book is an independent GitHub repository. The editor auto-syncs human edits
   Characters.md        # Character profiles and arcs
   Lore.md              # World-building and rules
   Summary.md           # Append-only delta log; last summary_context_entries paragraphs in context
-  Config.yml           # target_length, chapter_count, chapter_structure,
+  Config.yml           # language, target_length, chapter_count, chapter_structure,
                        # words_per_session, summary_context_entries, current_chapter
 
 /Chapters material/    # Chapter outlines only (no prose).
@@ -61,7 +61,7 @@ COMPLETE               # Written by engine when book is finished (triggers cron 
 ink-cli init /path/to/book-repo --title "My Book" --author "Jane Doe"
 ```
 
-This creates the full directory structure, populates all seed files with your title and author, and commits everything to `main`. Edit the files in `Global Material/` before the first writing session.
+This creates the full directory structure, populates all seed files, and commits everything to `main`. The response includes a `questions` array — the agent will ask the author 6 targeted questions (language, voice, plot arc, characters, world, Chapter 1 beats) and write the answers directly into the corresponding files, so the book is fully ready for the first writing session in one shot.
 
 **2. Register the cron job** — one per book on the agent gateway:
 
@@ -81,6 +81,20 @@ The `--model` flag (or equivalent) is where the AI model is chosen — not in th
 ## For AI Agents
 
 This section is the entry point for any AI model given a book repository URL.
+
+> **Full engine instructions** are in `AGENTS.md` at the root of every scaffolded book repo. A model cloning a book repo will find everything it needs there, including the install step and complete session flow.
+
+### Step 0 — Verify ink-cli is installed
+
+```bash
+ink-cli --version
+```
+
+If not found:
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/install.sh | sh
+```
 
 ### Step 1 — Clone or sync the repository
 
@@ -120,11 +134,16 @@ On success you will receive:
   "status": "initialized",
   "title": "Book Title",
   "author": "Author Name",
-  "files_created": ["Global Material/Config.yml", "..."]
+  "files_created": ["Global Material/Config.yml", "..."],
+  "questions": [
+    { "question": "What language should the engine write in?", "target_file": "Global Material/Config.yml" },
+    { "question": "What is the narrative voice, tone, and prose style?", "target_file": "Global Material/Soul.md" },
+    "..."
+  ]
 }
 ```
 
-**After init, stop.** Do not start a writing session immediately. The human author must fill in `Global Material/` (Soul.md, Outline.md, Characters.md, Lore.md) and `Chapters material/Chapter_01.md` before the first session is meaningful. Notify them that the scaffold is ready and they can start editing.
+**After init, run the Q&A flow.** Present each question to the author one at a time. Once you have all answers, write them to their `target_file` (for `Config.yml`, update only the `language:` field; for all others, replace the seed content). Then commit and push with message `"init: populate global material from author Q&A"` and stop. The book is ready for its first writing session.
 
 ### Ongoing writing — session loop
 

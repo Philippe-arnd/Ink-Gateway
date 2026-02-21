@@ -30,7 +30,7 @@ The **agent gateway** is a self-hosted AI agent platform. The `ink-engine` is a 
   Lore.md              ← World-building and rules
   Summary.md           ← Append-only delta log; last summary_context_entries
                           paragraphs loaded per session
-  Config.yml           ← target_length, chapter_count, chapter_structure,
+  Config.yml           ← language, target_length, chapter_count, chapter_structure,
                           words_per_session, summary_context_entries, current_chapter
                           (model is set at the agent gateway level, not here)
 
@@ -87,7 +87,7 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 
 | Subcommand | Phase | Responsibility | Output |
 |---|---|---|---|
-| `init <repo-path>` | Setup | Scaffold all dirs + seed files → commit + push | JSON: `status`, `files_created` |
+| `init <repo-path>` | Setup | Scaffold all dirs + seed files → commit + push; present 6 Q&A questions | JSON: `status`, `files_created`, `questions` |
 | `session-open <repo-path>` | Start | git-setup + read-context → full payload | JSON payload |
 | `session-close <repo-path>` | End | stdin prose → write + maintain + push | JSON: word counts + `completion_ready` |
 | `complete <repo-path>` | Finish | Write `COMPLETE` + final push | JSON: `{ "status": "complete" }` |
