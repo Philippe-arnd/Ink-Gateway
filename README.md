@@ -16,7 +16,7 @@ Three components sync through GitHub on a self-hosted VPS:
 |---|---|
 | ✏️ **Markdown editor** | Browser-based editor. Auto-commits and pushes every save to GitHub. |
 | 🐙 **GitHub** | Single source of truth. Sync layer between editor and engine. |
-| 🤖 **`ink-engine` agent** | Triggered on schedule. Pulls, reads context, writes `words_per_session` words of prose, pushes everything back. |
+| 🤖 **`ink-engine` agent** | Triggered on schedule. Pulls, reads context, writes prose, pushes everything back. |
 
 Each book is an **independent GitHub repository**. The editor syncs human edits throughout the day; the engine picks them up at session time, generates new prose, and pushes back.
 
@@ -34,18 +34,46 @@ Each book is an **independent GitHub repository**. The editor syncs human edits 
   Lore.md              # World-building and rules
   Summary.md           # Append-only session log (last N paragraphs in context)
   Config.yml           # language, target_length, chapter_count, chapter_structure,
-                       # words_per_session, summary_context_entries, current_chapter
+                       # words_per_session, summary_context_entries, current_chapter,
+                       # words_per_page (pagination in Full_Book.md, default 250)
 
 /Chapters material/    # Chapter outlines only — no prose
                        # Only current_chapter and next are loaded per session
 /Review/
-  current.md           # Rolling context window. Overwritten each session.
+  current.md           # Rolling prose window. The engine reads and rewrites this each
+                       # session. Author adds <!-- INK: --> instructions here.
 /Changelog/
   YYYY-MM-DD-HH-MM.md # Word count, human edits, narrative summary per session
 /Current version/
-  Full_Book.md         # All prose. Engine appends each session.
-                       # Git history + ink-* tags = versioning + rollback points
+  Full_Book.md         # Validated prose only. Auto-managed — do not edit directly.
+                       # Includes <!-- PAGE N --> pagination markers.
+                       # Git history + ink-* tags = versioning + rollback points.
 COMPLETE               # Written by engine when book is finished
+```
+
+### The `current.md` / `Full_Book.md` split
+
+| File | Role | Who touches it |
+|---|---|---|
+| `current.md` | Rolling prose window — last session's output + author instructions | Engine rewrites it every session; author adds `<!-- INK: -->` comments |
+| `Full_Book.md` | Vault of all validated prose — auto-managed, read-only for the author | Engine appends at each `session-close`; **never edit manually** |
+
+**Split rule:** everything in `current.md` **before** the first `<!-- INK: [instruction] -->` tag is validated. `session-close` automatically moves it to `Full_Book.md`. The engine then rewrites `current.md` from that split point onwards, marking reworked and new sections with diff markers.
+
+```
+current.md after a session:
+
+  [clean prose — validated next session]
+
+  <!-- INK: make this paragraph more tense -->   ← author instruction
+
+  <!-- INK:REWORKED:START -->
+  ...engine's rewrite of the instructed passage...
+  <!-- INK:REWORKED:END -->
+
+  <!-- INK:NEW:START -->
+  ...new continuation prose from this session...
+  <!-- INK:NEW:END -->
 ```
 
 ---
@@ -64,7 +92,7 @@ curl -sSfL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/inst
 |---|---|
 | `ink-cli init <repo>` | 📖 Scaffold a new book — interactive Q&A in TTY, JSON payload for agents |
 | `ink-cli session-open <repo>` | 🔓 Start a writing session — sync, detect edits, load context |
-| `ink-cli session-close <repo>` | 🔒 End a writing session — write prose, update files, push |
+| `ink-cli session-close <repo>` | 🔒 End a writing session — split current.md, update Full_Book, push |
 | `ink-cli complete <repo>` | 🏁 Mark book as finished — write `COMPLETE` marker, final push |
 | `ink-cli reset <repo>` | 🗑️ Wipe all content — allows re-running `init` (confirmation required) |
 | `ink-cli rollback <repo>` | ⏪ Revert to before the last session — force-push (confirmation required) |
@@ -81,8 +109,8 @@ Run once per book in an existing git repository. Creates all directories, seed f
 
 | Mode | Behaviour |
 |---|---|
-| **TTY** (human at terminal) | Interactive Q&A: language prompt + `$EDITOR` for each question. Writes answers, commits, pushes — book ready in one shot. |
-| **Non-TTY** (agent / pipe) | Outputs JSON with `status`, `files_created`, and a `questions` array for the agent to process. |
+| **TTY** (human at terminal) | 10 inline questions grouped by section (Language / Voice / Characters / Plot / World / Chapter 1). Shows a review summary, asks confirmation, commits and pushes — book ready in one shot. |
+| **Non-TTY** (agent / pipe) | Outputs JSON with `status`, `files_created`, and a `questions` array (each with `question`, `hint`, `target_file`). The agent presents questions, **extrapolates** answers into rich Global Material, writes files, commits. |
 
 ---
 
@@ -112,7 +140,10 @@ echo "$prose" | ink-cli session-close <repo-path> \
   --human-edit "Chapters material/Chapter_03.md"   # repeatable
 ```
 
-Reads prose from stdin, writes `Review/current.md`, appends `Summary.md` and `Full_Book.md`, writes a `Changelog/` entry, releases the lock, pushes `main` + `draft`.
+Reads new prose from stdin (the engine's new `current.md` content), then:
+1. Extracts the **validated section** from old `current.md` (everything before the first `<!-- INK: -->` instruction) and appends it to `Full_Book.md` with `<!-- PAGE N -->` pagination markers
+2. Overwrites `Review/current.md` with the new prose from stdin
+3. Appends to `Summary.md`, writes a `Changelog/` entry, releases the lock, pushes `main` + `draft`
 
 ```json
 {
@@ -123,6 +154,8 @@ Reads prose from stdin, writes `Review/current.md`, appends `Summary.md` and `Fu
   "status": "closed"
 }
 ```
+
+`total_word_count` reflects **validated prose only** (words in `Full_Book.md`, excluding comment markers).
 
 ---
 
@@ -172,7 +205,7 @@ git clone https://github.com/<github-username>/<book-repo> /path/to/book
 ink-cli init /path/to/book --title "My Book" --author "Jane Doe"
 ```
 
-The CLI will walk you through 6 questions in your `$EDITOR` — language, narrative voice, plot arc, characters, world, and Chapter 1 beats. Everything is committed automatically.
+The CLI asks 10 short questions grouped by section — language, voice & style, characters, plot arc, world, and Chapter 1 beats. All inline, no editor needed. Everything is committed automatically.
 
 **3. Register the cron job** on your agent gateway:
 
@@ -192,7 +225,8 @@ The `--model` flag is the only place the AI model is configured — it is not st
 ### Day-to-day authoring
 
 - ✏️ **Edit** any file in your markdown editor — changes auto-commit and push.
-- 💬 **Direct the engine** by adding `<!-- INK: [your instruction] -->` anywhere in `current.md`. It will be picked up on the next session.
+- 💬 **Direct the engine** by adding `<!-- INK: [your instruction] -->` anywhere in `current.md`. Everything before this marker is treated as validated and moved to `Full_Book.md`. The engine rewrites from this point onwards.
+- ✅ **Validate silently** by not adding any INK instructions — the engine treats the entire `current.md` as approved and appends it to `Full_Book.md`.
 - 📖 **Advance chapters** by incrementing `current_chapter` in `Config.yml` when you're satisfied a chapter is complete.
 - ⏪ **Undo a bad session** with `ink-cli rollback`.
 - 🔄 **Start over** with `ink-cli reset` followed by `ink-cli init`.
@@ -229,7 +263,7 @@ git -C /data/ink-gateway/books/<repo-name> pull origin main
 
 | `Global Material/Config.yml` | Action |
 |---|---|
-| **Absent** | Run `ink-cli init` — then follow the Q&A flow |
+| **Absent** | Run `ink-cli init` — then follow the Q&A + extrapolation flow |
 | **Present** | Run a writing session — follow `AGENTS.md` |
 
 ### Step 3 — Init (first time only)
@@ -240,14 +274,13 @@ ink-cli init /data/ink-gateway/books/<repo-name> \
   --author "<Author Name>"
 ```
 
-Derive `--title` from the repo name (hyphens/underscores → spaces, title case). Derive `--author` from the GitHub username or triggering message.
-
-The JSON response includes a `questions` array. Present each question to the author one at a time. Write answers to their `target_file` (`Config.yml` → update only the `language:` field; all others → replace full content). Commit and push with `"init: populate global material from author Q&A"`. Stop — the book is ready for its first writing session.
+The JSON response includes a `questions` array. Present each question to the author (show `hint` as context). Once you have all answers, **extrapolate** each into rich, detailed content before writing to `target_file`. Commit and push. Stop — the book is ready.
 
 ### Step 4 — Session loop (every scheduled run)
 
 ```
-session-open → abort checks → plan → generate → session-close → complete?
+session-open → abort checks → analyse current.md → consistency check
+→ generate (rework + new) → session-close → complete?
 ```
 
 See `AGENTS.md` in the book repo for the full engine prompt and guardrails.
@@ -273,6 +306,6 @@ If `ink-cli` returns `"status": "error"` or exits non-zero — **stop immediatel
 | Phase | Status | Description |
 |---|---|---|
 | **Phase 1** | ✅ Complete | Editor git sync, agent registration, `session-open` |
-| **Phase 2** | ✅ Complete | `session-close`, `complete`, `init`, `reset`, `rollback`, interactive TUI |
+| **Phase 2** | ✅ Complete | `session-close`, `complete`, `init`, `reset`, `rollback`, interactive TUI, current.md/Full_Book split, pagination |
 | **Phase 3** | 🔲 Planned | `ink-engine` AGENTS.md with inline tool definitions |
 | **Phase 4** | 🔲 Planned | Static site, validation layer |
