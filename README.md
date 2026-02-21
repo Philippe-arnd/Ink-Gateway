@@ -1,6 +1,10 @@
+<p align="center">
+  <img src="logo.svg" alt="Ink Gateway" width="120"/>
+</p>
+
 # Ink Gateway
 
-A collaborative AI-driven framework for writing Science Fiction and Fantasy novels. The engine runs nightly writing sessions autonomously, while the human author edits in a browser-based markdown editor — no Git knowledge required.
+A collaborative AI-driven framework for writing Science Fiction and Fantasy novels. The engine runs writing sessions autonomously on any schedule, while the human author edits in a browser-based markdown editor — no Git knowledge required.
 
 ## How It Works
 
@@ -8,67 +12,67 @@ Three components sync through GitHub on a self-hosted VPS:
 
 | Component | Role |
 |---|---|
-| **SilverBullet** (`write.philapps.com`) | Human author's markdown editor. Uses the built-in Git library to auto-commit and push edits to GitHub. |
-| **GitHub** | Single source of truth. The sync layer between SilverBullet and the engine. |
-| **OpenClaw `ink-engine` agent** | Runs nightly at 02:00 UTC. Pulls from GitHub, reads context, generates ~5 pages of prose, pushes all Git operations. |
+| **Markdown editor** | Human author's browser-based editor. Auto-commits and pushes edits to GitHub. |
+| **GitHub** | Single source of truth. The sync layer between the editor and the engine. |
+| **`ink-engine` agent** | Triggered on schedule. Pulls from GitHub, reads context, generates `words_per_session` words of prose, pushes all Git operations. |
 
-Each book is an independent GitHub repository. SilverBullet auto-syncs human edits throughout the day; the engine pulls them at 02:00 UTC, generates new content, and pushes back. SilverBullet's next sync makes the AI output visible in the editor.
+Each book is an independent GitHub repository. The editor auto-syncs human edits throughout the day; the engine pulls them at the scheduled time, generates new content, and pushes back.
 
-**Implicit approval:** If no files were modified today, the previous draft is treated as accepted and the engine keeps writing. Human edits are the only signal needed.
+**Implicit approval:** If no files were modified today, the previous draft is accepted and the engine continues writing. Human edits are the only signal needed.
 
 ## Per-Book Repository Structure
 
 ```
 /Global Material/
-  Config.yml           # model, target_length, chapter_count, chapter_structure, nightly_output_target
-  Outline.md           # Plot arc; completion is detected when all arcs are fulfilled
-  Summary.md           # Append-only delta log; used as a progress anchor each session
-  Lore.md
-  Characters.md
-  Style_guide.md
+  Soul.md              # Narrator voice, tone, prose style
+  Outline.md           # Full plot arc and story goal
+  Characters.md        # Character profiles and arcs
+  Lore.md              # World-building and rules
+  Summary.md           # Append-only delta log; last summary_context_entries paragraphs in context
+  Config.yml           # target_length, chapter_count, chapter_structure,
+                       # words_per_session, summary_context_entries, current_chapter
 
-/Chapters material/    # Chapter outlines only (no prose). Human edits trigger AI re-evaluation.
+/Chapters material/    # Chapter outlines only (no prose).
+                       # Only current_chapter and next are loaded per session.
 /Review/
-  current.md           # Rolling ~5-page context window (~1500 words). Overwritten each session.
+  current.md           # Rolling context window (words_per_session words). Overwritten each session.
 /Changelog/
-  YYYY-MM-DD.md        # Date, word count, human edits detected, narrative summary
+  YYYY-MM-DD-HH-MM.md        # Date, word count, human edits detected, narrative summary
 /Current version/
-  Full_Book_[date].md  # Source of truth for all prose. Engine appends new pages each session.
+  Full_Book.md         # Source of truth for all prose. Engine appends each session.
+                       # Git history + ink-YYYY-MM-DD-HH-MM tags provide versioning.
 COMPLETE               # Written by engine when book is finished (triggers cron self-deletion)
 ```
 
-## Nightly Engine Session
+## Engine Session
 
-1. **Pre-flight** — Detect files modified today → `git add . && git commit -m 'chore: human updates' && git push origin main`
-2. **Snapshot** — `git tag pre-nightly-$(date +%F)`
-3. **Branch** — `git checkout draft && git rebase main`
-4. **Load context** — `/Global Material/` + `/Chapters material/` + `/Review/current.md`
-5. **Anchor** — Determine continuation from `current.md` + last `Summary.md` entry
-6. **Instructions** — Process `<!-- Claw: [Instruction] -->` comments in `current.md` → rewrite + delete
-7. **Generate** — `nightly_output_target` words following `Style_guide.md`
-8. **Maintain** — Overwrite `current.md` → append delta to `Summary.md` → write `/Changelog/[date].md` → append to `Full_Book_[date].md`
-9. **Completion check** — Arcs fulfilled + word count within ±10% → write `COMPLETE` → `openclaw cron delete <job-id>`
-10. **Sync** — `git push origin main` then `git push origin draft`
+1. **Open** — `session-open`: pre-flight commit of human edits, snapshot tag, draft branch, load all context
+2. **Concurrency check** — Abort if `.ink-running` lock exists (concurrent or crashed session). Each session gets its own `ink-YYYY-MM-DD-HH-MM` tag.
+3. **Plan** — Read `human_edits` and `<!-- INK: -->` instructions from payload; adapt session
+4. **Generate** — `words_per_session` words following `Soul.md` and `Outline.md`
+5. **Close** — `session-close` (prose via stdin): write `current.md`, append `Summary.md`, write `Changelog/`, append `Full_Book.md`, push
+6. **Complete (conditional)** — If word count within ±10% of target AND arcs fulfilled → write `COMPLETE` → cron self-deleted
 
 ## Registering a New Book
 
 ```bash
-openclaw cron add \
+agent-gateway cron add \
   --name "Ink: <Book Title>" \
-  --cron "0 2 * * *" \
+  --cron "<cron-schedule>" \
   --session isolated \
   --agent "ink-engine" \
+  --model <model-id> \
   --thinking high \
-  --message "Process book: https://github.com/Philippe-arnd/<book-repo>"
+  --message "Process book: https://github.com/<github-username>/<book-repo>"
 ```
 
-No central book registry — each book is simply a cron job. Deleting the cron job removes the book from the engine.
+The `--model` flag (or equivalent) is where the AI model is chosen — not in the book repo. No central book registry — each book is simply a cron job.
 
 ## Human Authoring Flow
 
-- Edit `/Review/current.md` or `/Chapters material/` files directly in SilverBullet.
-- Insert `<!-- Claw: [Instruction] -->` anywhere in `current.md` to request a targeted rewrite on the next nightly run.
-- SilverBullet's git auto-sync commits and pushes your edits automatically (every few minutes). No manual Git action required.
+- Edit any file in the markdown editor. Auto-sync commits and pushes automatically.
+- Insert `<!-- INK: [Instruction] -->` anywhere in `current.md` to request a targeted rewrite on the next session.
+- Increment `current_chapter` in `Config.yml` when you're satisfied a chapter is done.
 
 ## API Cost Reference
 
@@ -84,9 +88,9 @@ See `Requirements/cost-analysis.md` for the full breakdown.
 
 | Phase | Status | Description |
 |---|---|---|
-| **Phase 1** | Planned | SilverBullet git sync setup, `ink-engine` agent registration, `engine.py` scaffold |
-| **Phase 2** | Planned | Full nightly automation (cron, change detection, manuscript compiler, completion handler) |
-| **Phase 3** | Planned | Author the `ink-engine` `AGENTS.md` system prompt |
-| **Phase 4** | Planned | Static site (`books.philapps.com`), validation layer |
+| **Phase 1** | Planned | Editor git sync, agent registration, `session-open` Rust scaffold |
+| **Phase 2** | Planned | `session-close` + `complete`, full session automation |
+| **Phase 3** | Planned | Author `AGENTS.md` with inline tool definitions |
+| **Phase 4** | Planned | Static site, validation layer |
 
 See `Requirements/roadmap.md` for detailed task checklists and `Requirements/framework.md` for full architecture documentation.

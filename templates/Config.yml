@@ -1,10 +1,10 @@
 # Config.yml — Book Configuration Template
 # Copy this file to: Global Material/Config.yml in each book repository.
 # All fields are required. See comments for valid values.
-
-# AI model to use for narrative generation.
-# Recommended: claude-opus-4-6 for quality, claude-sonnet-4-5-20250929 for speed/cost.
-model: claude-opus-4-6
+#
+# NOTE: The AI model is NOT configured here. It is set at the agent gateway
+# level when registering the cron job (e.g., via --model or agent settings).
+# All AI credentials are managed by the agent gateway.
 
 # Target total length of the finished book in words.
 # Standard novel: 80000–100000. Novella: 40000–60000.
@@ -17,7 +17,22 @@ chapter_count: 30
 # Options: linear, multi-pov, vignette
 chapter_structure: linear
 
-# Words to generate per nightly session.
-# At 1 page ≈ 300 words, 1500 words ≈ 5 pages per night.
-# Adjust based on desired pace and model cost.
-nightly_output_target: 1500
+# Words to generate per session.
+# Also the size of the rolling context window in current.md.
+# Adjust based on desired pace.
+words_per_session: 1500
+
+# Number of recent Summary.md paragraphs to include in context each session.
+# Keeps input token usage bounded as the book grows.
+summary_context_entries: 5
+
+# The chapter currently being written (1-indexed).
+# Increment this value (via the editor) when you are satisfied a chapter is complete.
+# Only the current chapter and the next one are loaded into context each session.
+current_chapter: 1
+
+# Maximum wall-clock minutes a session lock is considered valid.
+# If .ink-running is older than this, session-open treats it as a crashed/killed session
+# and removes the stale lock automatically before proceeding.
+# Set this to slightly above the longest session you expect (default: 60).
+session_timeout_minutes: 60

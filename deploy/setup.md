@@ -1,194 +1,198 @@
 # Ink Gateway — VPS Infrastructure Setup
 
-All steps run on the OVH VPS managed via Coolify, unless noted otherwise.
+All steps run on the self-hosted VPS, unless noted otherwise.
 
 ---
 
 ## Architecture: Git as the Sync Layer
 
-No shared volume is needed between SilverBullet and OpenClaw. GitHub is the single source of truth. Each container clones the book repo independently and syncs through git.
+No shared volume between the editor and the agent gateway. GitHub is the single source of truth.
 
 ```
-Human edits in SilverBullet
-  → SilverBullet git auto-sync commits + pushes to GitHub (every N min)
+Human edits in markdown editor
+  → Editor git auto-sync commits + pushes to GitHub
 
-At 02:00 UTC, OpenClaw runs engine.py
-  → git fetch / pull from GitHub (picks up human edits)
-  → generates AI prose
-  → git push to GitHub
+At scheduled time, agent gateway runs ink-engine
+  → ink-cli session-open: fetch from GitHub, commit human edits, load context
+  → agent generates prose
+  → ink-cli session-close: write + maintain + push to GitHub
 
-SilverBullet next auto-sync
-  → git pull from GitHub (human sees AI output in editor)
+Editor next auto-sync
+  → git pull from GitHub (human sees AI output)
 ```
 
 ---
 
-## 1. SilverBullet — Git Sync Setup
+## 1. Markdown Editor — Git Sync Setup
 
-SilverBullet's built-in Git library handles the human author's sync. It runs shell-based git commands, so git must be available in the container and credentials must be configured.
-
-### 1a. Enable shell and install git
-
-In Coolify → SilverBullet service → **"Docker Compose Override"**:
-
-```yaml
-services:
-  silverbullet:
-    environment:
-      - SB_SHELL_BACKEND=local     # enables shell commands (default, but make it explicit)
-      - GITHUB_TOKEN=ghp_your_token_here
-```
-
-Then add a startup script or custom Dockerfile to ensure git is installed and the credential helper is configured:
+### 1a. Git credentials
 
 ```bash
-# Inside the SilverBullet container (or baked into a custom image)
-apt-get install -y git
 git config --global credential.helper store
-git config --global user.name "SilverBullet"
+git config --global user.name "Ink Editor"
 git config --global user.email "ink-engine@noreply"
-echo "https://Philippe-arnd:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
+echo "https://<github-username>:<github-token>@github.com" > ~/.git-credentials
 ```
 
-> If you prefer, an SSH key works here too — the credential lives in the SilverBullet container and is separate from OpenClaw.
+### 1b. Enable git auto-sync in the editor
 
-### 1b. Install and configure the Git library in SilverBullet
+Configure the editor to commit and push changes automatically on a timer (e.g., every 5 minutes if changes exist). Refer to your editor's git integration documentation.
 
-Open SilverBullet → run the command `Plugs: Add` → paste:
-
-```
-github:silverbulletmd/silverbullet-libraries/Git.md
-```
-
-In your SilverBullet `SETTINGS` page, add:
-
-```yaml
-git:
-  autoSync: 5        # commit + pull + push every 5 minutes if changes exist
-```
-
-### 1c. Clone the book repo into SilverBullet's space
-
-From inside the SilverBullet container (Coolify → Terminal):
+### 1c. Clone the book repo
 
 ```bash
-cd /space
-git clone https://Philippe-arnd:<token>@github.com/Philippe-arnd/<book-repo>.git
+cd /path/to/editor/space
+git clone https://<github-username>:<token>@github.com/<github-username>/<book-repo>.git
 ```
-
-The book will appear as a top-level folder in SilverBullet's file tree.
 
 ---
 
-## 2. OpenClaw — GitHub Access
+## 2. Agent Gateway — GitHub Access
 
-OpenClaw already has a GitHub token and the `gh` CLI configured. No additional setup is needed for git authentication.
-
-Verify `engine.py` can reach GitHub:
+Verify access:
 
 ```bash
-# Inside the OpenClaw container (Coolify → OpenClaw → Terminal)
 gh auth status
-git ls-remote https://github.com/Philippe-arnd/<book-repo>.git
+git ls-remote https://github.com/<github-username>/<book-repo>.git
 ```
 
-`engine.py` uses the HTTPS repo URL passed by the cron job message — the existing token handles authentication automatically.
+`ink-cli` uses the HTTPS repo URL — the configured token handles authentication automatically.
 
 ---
 
 ## 3. Register the `ink-engine` Agent
 
-Inside the OpenClaw container:
-
 ```bash
-openclaw agents add ink-engine --workspace /data/ink-gateway
+agent-gateway agents add ink-engine --workspace /data/ink-gateway
 ```
 
 Verify:
 
 ```bash
-openclaw agents list
+agent-gateway agents list
 # ink-engine should appear with workspace /data/ink-gateway
 ```
 
-The agent's `AGENTS.md` system prompt lives at `/data/ink-gateway/AGENTS.md` (authored in Phase 3).
+The agent's `AGENTS.md` system prompt lives at `/data/ink-gateway/AGENTS.md` (authored in Phase 3). It contains the tool definitions for `session-open` and `session-close` inline — no separate skill file needed.
 
 ---
 
-## 4. Book Repository Setup (per book)
+## 4. Deploy `ink-cli`
 
-Perform these steps once per new book.
-
-### 4a. Initialize the repo on GitHub
-
-Create a new GitHub repo under `Philippe-arnd/<book-repo>` (private). Then initialize the book structure locally and push:
+Build the Rust binary and install it on the VPS:
 
 ```bash
-git clone https://github.com/Philippe-arnd/<book-repo>.git
+# In the Ink Gateway repo
+cargo build --release
+cp target/release/ink-cli /usr/local/bin/ink-cli
+```
+
+Verify:
+
+```bash
+ink-cli --version
+ink-cli --help
+```
+
+---
+
+## 5. Book Repository Setup (per book)
+
+### 5a. Initialize the repo on GitHub
+
+Create a new private GitHub repo, then initialize the book structure:
+
+```bash
+git clone https://github.com/<github-username>/<book-repo>.git
 cd <book-repo>
 
 mkdir -p "Global Material" "Chapters material" "Review" "Changelog" "Current version"
 
-# Fill in book-specific values before committing
+# Copy and fill in the Config.yml template
 cp /path/to/Ink-Gateway/templates/Config.yml "Global Material/Config.yml"
+# Edit current_chapter, target_length, and other book settings as appropriate
+# NOTE: The AI model is NOT set here — configure it via --model when registering the cron job
 
+# Create the Global Material files
+touch "Global Material/Soul.md"
 touch "Global Material/Outline.md"
-touch "Global Material/Summary.md"
-touch "Global Material/Lore.md"
 touch "Global Material/Characters.md"
-touch "Global Material/Style_guide.md"
+touch "Global Material/Lore.md"
+touch "Global Material/Summary.md"
+
+# Create working files
 touch "Review/current.md"
+touch "Current version/Full_Book.md"
+
+# Create at least the first chapter outline
+touch "Chapters material/Chapter_01.md"
 
 git add .
 git commit -m "chore: initialize book structure"
 git push origin main
 ```
 
-### 4b. Create the `draft` branch
+### 5b. Create the `draft` branch
 
 ```bash
 git checkout -b draft main
 git push -u origin draft
 ```
 
-> `engine.py` handles this automatically on first run. Doing it manually here confirms repo access is working.
+> `ink-cli session-open` handles this automatically on first run. Doing it manually confirms repo access is working.
 
-### 4c. Clone into SilverBullet
+### 5c. Clone into the editor
 
 Follow step 1c above so the book appears in the editor.
 
+### 5d. Fill in the content files
+
+Before the first session, the author should add content to:
+- `Global Material/Soul.md` — define the book's narrative voice
+- `Global Material/Outline.md` — write the plot arc
+- `Global Material/Characters.md` — describe main characters
+- `Chapters material/Chapter_01.md` — write the first chapter outline
+
 ---
 
-## 5. Register the OpenClaw Cron Job (per book)
+## 6. Register the Cron Job (per book)
 
 ```bash
-openclaw cron add \
+agent-gateway cron add \
   --name "Ink: <Book Title>" \
-  --cron "0 2 * * *" \
+  --cron "<cron-schedule>" \
   --session isolated \
   --agent "ink-engine" \
+  --model <model-id> \
   --thinking high \
-  --message "Process book: https://github.com/Philippe-arnd/<book-repo>"
+  --message "Process book: https://github.com/<github-username>/<book-repo>"
 ```
 
 Verify:
 
 ```bash
-openclaw cron list
-# "Ink: <Book Title>" should appear, scheduled at 02:00 UTC
+agent-gateway cron list
+# "Ink: <Book Title>" should appear with the configured schedule
 ```
 
 ---
 
 ## Quick Reference
 
-| Component | GitHub auth | How |
+| Component | GitHub auth | Method |
 |---|---|---|
-| SilverBullet | Fine-grained PAT | HTTPS credential store or SSH key in SilverBullet container |
-| OpenClaw | Existing token + `gh` CLI | Already configured — no changes needed |
+| Markdown editor | Fine-grained PAT | HTTPS credential store or SSH key |
+| Agent gateway | Existing token + `gh` CLI | Already configured |
 
 | Path | Purpose |
 |---|---|
-| `/data/ink-gateway/` | OpenClaw agent workspace root |
-| `/data/ink-gateway/AGENTS.md` | `ink-engine` system prompt (Phase 3) |
-| `/space/<book-repo>/` | Book as seen inside SilverBullet |
+| `/data/ink-gateway/` | Agent workspace root |
+| `/data/ink-gateway/AGENTS.md` | `ink-engine` system prompt + tool definitions (Phase 3) |
+| `/data/ink-gateway/books/<book-name>/` | Cloned book repo |
+| `/usr/local/bin/ink-cli` | Compiled Rust binary |
+
+| Config.yml field | Purpose |
+|---|---|
+| `current_chapter` | Active chapter — **increment via editor to advance** |
+| `words_per_session` | Words per session (also the size of `current.md`) |
+| `summary_context_entries` | How many recent `Summary.md` paragraphs go into context |

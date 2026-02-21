@@ -4,84 +4,123 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Ink Gateway** is a collaborative AI-driven fiction writing framework. It orchestrates nightly writing sessions between a human author and an AI agent (`ink-engine`) for Science Fiction and Fantasy novels. This repository is the **framework definition** — `engine.py` lives here. Each book has its own separate GitHub repository.
-
-The project is currently in the **specification phase**. All authoritative documentation is in `Requirements/`. No implementation code exists yet.
+**Ink Gateway** is a collaborative AI-driven fiction writing framework. It orchestrates writing sessions between a human author and an AI agent (`ink-engine`) for Science Fiction and Fantasy novels. This repository is the **framework definition** — `ink-cli` (the Rust binary) lives here. Each book has its own separate GitHub repository.
 
 ## Architecture
 
-Three components synced through GitHub on a self-hosted OVH VPS (managed via Coolify):
+Three components synced through GitHub on a self-hosted VPS:
 
 | Component | Role |
 |---|---|
-| **SilverBullet** (`write.philapps.com`) | Human author's markdown editor. Uses the built-in Git library (`git.autoSync`) to commit and push edits to GitHub automatically. |
+| **Markdown editor** | Human author's browser-based editor. Auto-commits and pushes edits to GitHub. No Git knowledge required. |
 | **GitHub** | Single source of truth and sync layer between editor and engine. |
-| **OpenClaw `ink-engine` agent** | Runs nightly, pulls from GitHub, generates prose, pushes all Git operations back. |
+| **Agent gateway `ink-engine` agent** | Triggered on schedule, pulls from GitHub, generates prose, pushes all Git operations back. |
 
-No shared Docker volume. GitHub is the transport between SilverBullet and OpenClaw. OpenClaw already has a GitHub token and `gh` CLI configured — `engine.py` uses HTTPS URLs and the existing token for all git operations.
+The **agent gateway** is a self-hosted AI agent platform. The `ink-engine` is a named agent with workspace at `/data/ink-gateway`. Each book gets its own isolated cron job.
 
-**OpenClaw** ([docs.openclaw.ai](https://docs.openclaw.ai)) is a commercial self-hosted AI agent gateway. The `ink-engine` is a named agent registered with `openclaw agents add ink-engine --workspace /data/ink-gateway`. Each book gets its own isolated OpenClaw cron job — no central book registry needed.
+`ink-cli` is invoked via two shell tool definitions declared inline in `AGENTS.md` — no separate skill layer.
 
 ## Per-Book Repository Structure
 
-Each book repo is checked out at `/data/ink-gateway/books/<book-name>/`:
-
 ```
-/Global Material/      ← Permanent AI context (loaded every session)
-  Config.yml           ← model, target_length, chapter_count, chapter_structure, nightly_output_target
-  Outline.md           ← Plot arc; completion is detected when all arcs here are fulfilled
-  Summary.md           ← Append-only delta log; also used as a progress anchor
-  Lore.md, Characters.md, Style_guide.md
+/Global Material/      ← All permanent context; loaded every session
+  Soul.md              ← Narrator voice, tone, prose style
+  Outline.md           ← Full plot arc and story goal
+  Characters.md        ← Character profiles, arcs, consistency reference
+  Lore.md              ← World-building and rules
+  Summary.md           ← Append-only delta log; last summary_context_entries
+                          paragraphs loaded per session
+  Config.yml           ← target_length, chapter_count, chapter_structure,
+                          words_per_session, summary_context_entries, current_chapter
+                          (model is set at the agent gateway level, not here)
 
-/Chapters material/    ← Chapter outlines ONLY (no prose). Human edits here trigger AI re-evaluation.
+/Chapters material/    ← Chapter outlines ONLY (no prose).
+                          Only current_chapter and current_chapter+1 are loaded per session.
 /Review/
-  current.md           ← Rolling ~5-page context window. Overwritten each session with new output.
+  current.md           ← Rolling context window (words_per_session words).
+                          Overwritten each session.
 /Changelog/
-  YYYY-MM-DD.md        ← Structured: date, word count, human edits detected, narrative summary
+  YYYY-MM-DD.md        ← Date, word count, human edits detected, narrative summary
 /Current version/
-  Full_Book_[date].md  ← Source of truth for ALL prose. Engine appends new pages each session.
+  Full_Book.md         ← Single source of truth for all prose. Engine appends each session.
+                          Git history + ink-YYYY-MM-DD-HH-MM tags provide versioning.
 COMPLETE               ← Written by engine when book is finished (triggers cron self-deletion)
 ```
 
-## Nightly Engine Session (the core loop)
+## Engine Session (the core loop)
 
-1. **Pre-flight:** Detect files modified today by timestamp → `git add . && git commit -m 'chore: human updates' && git push origin main`
-2. **Snapshot:** `git tag pre-nightly-$(date +%F)`
-3. **Branch:** `git checkout draft && git rebase main`
-4. **Context load:** `/Global Material/` + `/Chapters material/` + `/Review/current.md`
-5. **Anchor:** Determine continuation from `current.md` content + last `Summary.md` entry
-6. **Instructions:** Process `<!-- Claw: [Instruction] -->` comments in `current.md` → rewrite + delete
-7. **Generate:** `nightly_output_target` words following `Style_guide.md`
-8. **Maintain (in order):** Overwrite `current.md` → append delta to `Summary.md` → write `/Changelog/[date].md` → append to `Full_Book_[date].md`
-9. **Completion check:** Arcs fulfilled + word count within ±10% → write `COMPLETE` → `openclaw cron delete <job-id>`
-10. **Sync:** `git push origin main` then `git push origin draft`
+1. **Open:** `session-open` → git-setup (pre-flight commit, snapshot tag, draft branch) + read-context (all Global Material, current+next chapter, current.md with INK instructions extracted) → full JSON payload
+2. **Concurrency check:** If `session_already_run` is `true` (`.ink-running` lock exists) → stop. Multiple sessions per day are supported; each gets an `ink-YYYY-MM-DD-HH-MM` tag.
+3. **Plan:** Read `human_edits` and `current.instructions` from payload; adapt session
+4. **Generate:** `words_per_session` words adhering to `Soul.md` and `Outline.md`
+5. **Close:** `session-close` (prose via stdin) → write `current.md`, append `Summary.md`, write `Changelog/`, append `Full_Book.md`, push `main` + `draft`
+6. **Complete (conditional):** If `completion_ready` AND arcs fulfilled → `complete` → write `COMPLETE`, final push, cron deleted
 
-**Implicit approval:** Human edits = signal. No edit = previous draft accepted. Engine always continues writing.
+**Implicit approval:** `human_edits` is empty = previous draft accepted; engine continues writing.
 
-## OpenClaw Cron Registration (one per book)
+**Instruction syntax:** `<!-- INK: [Instruction] -->` in `current.md` — extracted by `session-open` into a typed array.
+
+**Chapter advancement:** Author increments `current_chapter` in `Config.yml` to advance to the next chapter.
+
+## Agent Cron Registration (one per book)
 
 ```bash
-openclaw cron add \
+agent-gateway cron add \
   --name "Ink: <Book Title>" \
-  --cron "0 2 * * *" \
+  --cron "<cron-schedule>" \
   --session isolated \
   --agent "ink-engine" \
+  --model <model-id> \
   --thinking high \
-  --message "Process book: https://github.com/Philippe-arnd/<book-repo>"
+  --message "Process book: https://github.com/<github-username>/<book-repo>"
 ```
 
-The `ink-engine` agent parses the repo URL from the message and passes it to `engine.py` as an argument.
+The `--model` flag (or equivalent in your gateway) is the only place the AI model is configured — it is not stored in the book repo. All AI credentials are managed by the agent gateway.
 
 ## Implementation Language & Key Files
 
-- **`engine.py`** (to be built, lives in this repo) — Python orchestrator. Accepts a GitHub repo URL argument. Handles all Git operations, context reading, and calls the AI model.
-- **`ink-engine` AGENTS.md** (Phase 3) — The writing engine system prompt. Lives in the agent's workspace on the VPS. See `Requirements/writing_engine.md` for the full technical mandate.
+- **`ink-cli`** — Rust binary. Three subcommands: `session-open`, `session-close`, `complete`.
+- **`Cargo.toml`** — dependency manifest.
+- **`ink-engine` AGENTS.md** (Phase 3) — Writing engine system prompt + inline tool definitions.
+
+### `ink-cli` Subcommands
+
+| Subcommand | Phase | Responsibility | Output |
+|---|---|---|---|
+| `session-open <repo-path>` | Start | git-setup + read-context → full payload | JSON payload |
+| `session-close <repo-path>` | End | stdin prose → write + maintain + push | JSON: word counts + `completion_ready` |
+| `complete <repo-path>` | Finish | Write `COMPLETE` + final push | JSON: `{ "status": "complete" }` |
+
+### Source Layout
+
+```
+src/
+  main.rs          ← clap router + top-level error handling
+  git.rs           ← git operations (pre-flight, snapshot, branch, push)
+  context.rs       ← context aggregation, INK instruction extraction, JSON output
+  maintenance.rs   ← summary / changelog / Full_Book compiler
+  config.rs        ← Config.yml parsing (serde_yaml)
+Cargo.toml
+```
+
+### Key Crates
+
+| Crate | Purpose |
+|---|---|
+| `clap` | Subcommand CLI (`derive` feature) |
+| `serde` + `serde_yaml` | Parse `Config.yml` |
+| `serde_json` | Structured JSON output for all subcommands |
+| `chrono` | Date-stamped tags, filenames, changelog entries |
+| `walkdir` | Directory traversal for `Global Material/` |
+| `regex` | Extract `<!-- INK: ... -->` instruction comments |
+| `anyhow` | Ergonomic error propagation |
+| `tracing` + `tracing-subscriber` | Structured logging |
 
 ## Implementation Roadmap Summary
 
-- **Phase 1:** SilverBullet git sync setup, `ink-engine` agent registration, `engine.py` scaffold (Git ops + payload builder)
-- **Phase 2:** Full nightly automation (cron, change detection, rolling `current.md`, append summary, manuscript compiler, completion handler)
-- **Phase 3:** Author the `ink-engine` `AGENTS.md` system prompt
-- **Phase 4:** Static site for `books.philapps.com`, validation layer
+- **Phase 1:** Editor git sync, agent registration, `session-open` subcommand
+- **Phase 2:** `session-close` + `complete` subcommands, cron registration
+- **Phase 3:** Author `AGENTS.md` with inline tool definitions
+- **Phase 4:** Static site, validation layer
 
 See `Requirements/roadmap.md` for detailed task checklists.

@@ -1,74 +1,208 @@
 # Writing Engine Brain - Technical Specification
 
-This document serves as the technical mandate for the OpenClaw `ink-engine` sub-agent running the Ink Gateway engine.
+This document serves as the technical mandate for the `ink-engine` agent running an Ink Gateway writing session.
 
 ## 1. Environment & Permissions
-The engine operates on the **Shared Volume** (`/data/ink-gateway/books/<book-name>/`), which is the Git working tree for the book repository. This same volume is mounted by SilverBullet.
 
-- **Clone Location:** The book repo is checked out directly onto the shared volume at `/data/ink-gateway/books/<book-name>/`.
-- **Git Auth:** The `ink-engine` agent uses configured SSH keys to push/pull from GitHub.
-- **SilverBullet:** Purely file-based; no Git awareness. All Git operations are owned by `engine.py`.
+- **Clone location:** `/data/ink-gateway/books/<book-name>/`
+- **Git auth:** The agent gateway's configured GitHub token handles all push/pull.
+- **File I/O:** The agent never writes files directly. All operations go through `ink-cli` subcommands.
+- **Tools:** Two shell tools — `session_open` and `session_close` — defined inline in `AGENTS.md`.
+
+---
 
 ## 2. Context Assembly (The Input)
-For every session, the engine must load:
-- **Permanent Context:** All files in `/Global Material/`.
-- **Structural Context:** All files in `/Chapters material/` (to detect human edits by timestamp).
-- **Active Context:** `/Review/current.md` — the rolling ~5-page context window (~1500 words).
-- **Progress Anchoring:** Continuation point is determined from both:
-    - The content of `/Review/current.md` (where prose last left off).
-    - The last entry in `Summary.md` (narrative state checkpoint).
 
-### Change Detection (Smart Sync)
-- Check modification timestamps of all files on the shared volume.
-- **Logic:** Any file with a modification date matching the current calendar day is a "Human Override."
-- **Action:** Commit all modified files to `main` immediately before any AI generation:
-  `git add . && git commit -m 'chore: human updates' && git push origin main`
+The agent calls `ink-cli session-open <repo-path>`, which performs git-setup and context aggregation in a single step and returns one JSON payload.
+
+**What the payload contains:**
+
+| Field | Source | Notes |
+|---|---|---|
+| `config` | `Global Material/Config.yml` | All settings including `current_chapter` |
+| `session_already_run` | Lock file existence | `true` if `.ink-running` exists in repo root (concurrent or crashed session) |
+| `global_material[]` | All files in `Global Material/` | `Summary.md` truncated to last `summary_context_entries` paragraphs |
+| `chapters.current` | `Chapters material/Chapter_<N>.md` | Only the active chapter (`current_chapter` from config) |
+| `chapters.next` | `Chapters material/Chapter_<N+1>.md` | Look-ahead for narrative planning |
+| `current.content` | `Review/current.md` | Previous session's prose — the rolling context window |
+| `current.instructions` | Extracted from `current.md` | `<!-- INK: ... -->` comments as a typed array |
+| `word_count` | `Full_Book.md` word count | `{ total, target, remaining }` |
+| `human_edits` | Git timestamp check | Files modified today, committed to `main` |
+
+**`Global Material/` contains:**
+- `Soul.md` — narrator voice, tone, prose style
+- `Outline.md` — full plot arc and story goal
+- `Characters.md` — character profiles and arcs
+- `Lore.md` — world-building and consistency rules
+- `Summary.md` — append-only session log (truncated in context)
+- `Config.yml` — book parameters
+
+---
 
 ## 3. Core Logic & Prioritization
-1. **Human Writer Override:**
-    - Detect and commit any files modified today to `main`.
-    - Adapt the session plan based on detected changes (e.g. if a chapter outline changed, re-evaluate that chapter's direction).
-2. **Instruction Processing:**
-    - Scan `/Review/current.md` for `<!-- Claw: [Instruction] -->` comments.
-    - **Action:** Replace targeted text + delete the comment.
-3. **Narrative Generation:**
-    - Anchor to the continuation point from `/Review/current.md` + `Summary.md`.
-    - Reference `Outline.md` and the relevant `/Chapters material/` file.
-    - Generate `nightly_output_target` words (from `Config.yml`; default ~1500 words / ~5 pages).
-    - Style must strictly adhere to `/Global Material/Style_guide.md`.
 
-**Implicit Approval:** No explicit approval from the human author is required. If no files were modified today, the previous draft is treated as accepted and the engine continues writing.
+### 3.1 Abort Checks
+**First checks after `session-open` — evaluate in this order before any other action:**
 
-## 4. Maintenance & Sync Tasks (The Output)
-After generating prose, the engine MUST execute in this order:
+1. **Kill requested:** if `kill_requested` is `true`, log "Kill signal received — session cancelled by author." Stop immediately. No prose generation, no further tool calls.
+2. **Concurrent session:** if `session_already_run` is `true`, log "Session already in progress — lock file is current. Aborting to avoid conflict." Stop immediately.
+3. **Stale lock recovered:** if `stale_lock_recovered` is `true`, log "Stale lock removed (previous session exceeded timeout or was killed externally). Proceeding." Continue with the session normally.
 
-1. **Update `/Review/current.md`:** Overwrite with the new ~5 pages. This becomes the context window for the next session.
-2. **Append to `Summary.md`:** Add a delta summary paragraph covering only the new session's events. Do not rewrite or truncate existing entries.
-3. **Write Changelog entry:** Append a structured entry to `/Changelog/[YYYY-MM-DD].md` containing:
-    - Date header
-    - AI word count generated
-    - List of human edits detected (filenames + one-line description of change)
-    - One-paragraph narrative summary of the session
-4. **Compile Manuscript:** Read the previous `Full_Book_[YYYY-MM-DD].md`, append the new pages, write a new `Full_Book_[YYYY-MM-DD].md` (today's date). This file is the persistent source of truth for all prose.
-5. **Completion Check:** If `Outline.md` arcs are fulfilled and total word count is within ±10% of `target_length`:
-    - Write a `COMPLETE` file to the repo root.
-    - Call `openclaw cron delete <job-id>` to disable the nightly schedule.
-6. **Sync to GitHub:**
-    - `git push origin main` (human updates + all maintenance files).
-    - `git push origin draft` (AI-generated prose).
+> **How to cancel a session:** Create an `.ink-kill` file in the repo root via the markdown editor. The editor auto-commits and pushes it to GitHub. The engine detects it on the next scheduled trigger and cancels that run. This cancels the *next* session only — it does not interrupt a session that is already running. To stop a running session, use the gateway's native cancel/stop control; the stale lock recovery mechanism will handle cleanup on the next trigger.
 
-## 5. Automation (The Cron Job)
-- **Platform:** OpenClaw cron scheduler (`--session isolated`).
-- **Schedule:** 02:00 UTC nightly.
-- **Registration command (one per book):**
-  ```bash
-  openclaw cron add \
-    --name "Ink: <Book Title>" \
-    --cron "0 2 * * *" \
-    --session isolated \
-    --agent "ink-engine" \
-    --thinking high \
-    --message "Process book: https://github.com/Philippe-arnd/<book-repo>"
-  ```
-- **Repo URL delivery:** The `ink-engine` agent parses the GitHub repo URL from its incoming cron message and passes it to `engine.py` as an argument.
-- **Pre-run check:** Before any generation, verify if files have been modified today. If yes: commit to `main` first.
+### 3.2 Human Override
+Read `human_edits` from the payload. Adapt the session plan:
+- Chapter outline changed → re-evaluate that chapter's direction.
+- `current.md` was edited → treat the human's version as authoritative.
+- `Soul.md` changed → the human has adjusted the narrative voice; honor it.
+- `Outline.md` changed → re-read the updated plot arc before generating.
+
+### 3.3 Instruction Processing
+Read `current.instructions` from the payload. For each entry:
+- Locate the `anchor` passage in `current.content`.
+- Apply the `instruction` as a targeted rewrite of that specific passage.
+- Comments are already stripped from `current.content` — no cleanup needed.
+- Incorporate rewritten passages into the final prose output.
+
+### 3.4 Narrative Generation
+- Anchor to the continuation point in `current.content` and last `Summary.md` entry.
+- Reference `Outline.md` arc and `chapters.current` for the active chapter's goals.
+- Consult `chapters.next` for look-ahead coherence at chapter boundaries.
+- Generate exactly `config.words_per_session` words.
+- Voice and style must adhere to `Soul.md`.
+
+**Implicit Approval:** If `human_edits` is empty, the previous draft is accepted — continue writing.
+
+---
+
+## 4. Output & Sync
+
+The agent calls `ink-cli session-close <repo-path>` with generated prose piped via stdin. The binary executes in strict order:
+
+1. Overwrite `Review/current.md` with the new prose (becomes next session's context window).
+2. Append a delta paragraph to `Summary.md` — this session's events only, never rewrite existing entries.
+3. Write a structured entry to `Changelog/[YYYY-MM-DD].md`:
+   - Date header
+   - Session word count
+   - List of human edits (filenames + one-line description)
+   - One-paragraph narrative summary
+4. Append new prose to `Current version/Full_Book.md`.
+5. `git push origin main` + `git push origin draft`.
+
+Returns JSON:
+```json
+{
+  "session_word_count": 1487,
+  "total_word_count": 43210,
+  "target_length": 90000,
+  "completion_ready": false,
+  "status": "closed"
+}
+```
+
+### Completion (conditional)
+`completion_ready` is `true` when `total_word_count` is within ±10% of `target_length`. This is a necessary but not sufficient condition. The agent must also confirm that the narrative arcs in `Outline.md` are genuinely fulfilled.
+
+If both are satisfied, the agent calls `ink-cli complete <repo-path>`, which:
+1. Writes a `COMPLETE` file to the repo root.
+2. Commits and pushes it.
+
+Returns JSON: `{ "status": "complete", "total_word_count": N }`.
+
+After receiving this response, the agent:
+- Notifies the user via the gateway's configured notification channel.
+- Signals the gateway to delete this cron job.
+
+These are the final actions of the session. No further tool calls are made.
+
+---
+
+## 5. Automation, Bounds & Observability
+
+### 5.1 Session Token Budget
+
+Every cost component is bounded except extended thinking, which MUST be capped at the gateway level.
+
+| Component | Bound mechanism | ~Tokens (default config) |
+|---|---|---|
+| Context payload (input) | Config.yml params | ~4,800 input |
+| Generated prose (output) | `words_per_session` | ~2,250 output |
+| Tool call overhead | Fixed (2–3 calls/session) | ~300 |
+| Extended thinking | **Gateway `--thinking-budget`** | **Unbounded if not set** |
+
+**Context payload breakdown** (with default Config.yml values):
+- `current.md` (1,500 words): ~2,250 tokens — bounded by `words_per_session`
+- Soul + Outline + Characters + Lore: ~1,500 tokens — bounded by how much the author writes
+- `Summary.md` (last 5 paragraphs): ~500 tokens — bounded by `summary_context_entries`
+- 2 chapter outlines: ~300 tokens — bounded by outline length
+- Agent system prompt (AGENTS.md): ~250 tokens — fixed
+
+The payload does not grow as the book grows. `Summary.md` truncation and chapter-only loading keep it constant across all 40+ sessions.
+
+**The only runaway risk is extended thinking.** Without a thinking budget cap, a single session with `--thinking high` can consume 10K–32K tokens of thinking before generating a single word of prose. Multiply that by an agent that loops (even just once), and costs spike. The `--max-turns` gateway setting is the hard ceiling on looping.
+
+### 5.2 Recommended Gateway Configuration
+
+```bash
+agent-gateway cron add \
+  --name "Ink: <Book Title>" \
+  --cron "<cron-schedule>" \
+  --session isolated \
+  --agent "ink-engine" \
+  --model <model-id> \
+  --thinking high \
+  --thinking-budget 10000 \
+  --max-turns 5 \
+  --timeout 1800 \
+  --message "Process book: https://github.com/<github-username>/<book-repo>"
+```
+
+| Flag | Value | Rationale |
+|---|---|---|
+| `--thinking-budget` | 10000 | Caps thinking tokens. Normal session: 2–3 tool calls leaves ample room. |
+| `--max-turns` | 5 | Allows: open (1) + close (2) + complete (3) + 2 buffer for error handling. Hard ceiling on loops. |
+| `--timeout` | 1800 | 30-minute wall-clock limit. Triggers gateway kill; stale lock recovery cleans up on next run. |
+
+> Flag names are illustrative — use your gateway's equivalent parameters. The intent is: cap thinking tokens, cap tool call turns, cap wall time.
+
+### 5.3 Session Observability
+
+**What the user can see and where:**
+
+| Signal | Where | Latency |
+|---|---|---|
+| Session running now | `.ink-running` exists in repo (visible in editor) | Live (file is in repo) |
+| Session start time | Content of `.ink-running` (ISO timestamp) | Live |
+| Session result | `Changelog/YYYY-MM-DD-HH-MM.md` (auto-pushed by `session-close`) | After session ends |
+| Live agent output | Gateway logs / UI | Real-time |
+| Book progress | `word_count` field in `session-close` JSON (logged by gateway) | After session ends |
+
+**To cancel the next scheduled session:** Create `.ink-kill` in the repo root via the editor. The editor commits and pushes it. `session-open` detects it on the next trigger, cancels cleanly, and removes the file.
+
+**To stop a running session:** Use the gateway's native cancel/stop control. The session process is terminated. `.ink-running` remains on disk. On the next trigger, `session-open` detects the stale lock (age > `session_timeout_minutes`), removes it, logs the recovery, and proceeds from the last committed state.
+
+- **Repo path:** The agent gateway clones (or pulls) the repo from the URL in the message, then passes the local path to `ink-cli`.
+
+---
+
+## 6. Guardrails
+
+Two layers of protection against runaway execution and double-writes.
+
+### 6.1 Binary-Level (`ink-cli`)
+
+Enforced mechanically regardless of agent behavior:
+
+- **`session-close` lock check:** Before executing, verifies that `.ink-running` exists in the repo root. If absent → outputs `{ "error": "no active session", "status": "error" }` and exits non-zero. Prevents prose from being double-written if `session-close` is called twice in one session.
+- **`complete` idempotency:** Before executing, verifies that `COMPLETE` does not already exist. If it does → outputs `{ "error": "book already complete", "status": "error" }` and exits non-zero.
+
+### 6.2 Agent-Level (`AGENTS.md`)
+
+These rules MUST be stated explicitly in the writing engine's `AGENTS.md`:
+
+- **One open, one close:** Call `session_open` exactly once at session start. Call `session_close` exactly once after prose is ready. Never call either tool again in the same session — the lock file is deleted on close, so a second `session_open` would succeed but produce a duplicate session.
+- **Abort on lock:** If `session_already_run` is `true`, stop immediately. Output a brief explanation. Do not call any other tools.
+- **No retries:** If any tool call returns a non-zero exit or an `"error"` status in the JSON, stop immediately. Do not retry. The next cron trigger will handle recovery.
+- **Generate before close:** Do not call `session_close` speculatively or as a mid-session checkpoint. Only call it when the complete prose output is ready.
+- **Completion discipline:** Call `complete` at most once, only when `completion_ready` is `true` AND you have verified narrative closure against `Outline.md`. When in doubt, do not call `complete` — the cron job will run again next session.
+- **Stop after complete:** After a successful `complete` response, notify the user and signal the cron job deletion. These are the final actions — no further tool calls.
