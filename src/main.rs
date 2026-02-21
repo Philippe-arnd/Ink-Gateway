@@ -86,7 +86,13 @@ fn main() -> Result<()> {
         }
         Commands::Init { repo_path, title, author } => {
             let result = init::run_init(&repo_path, &title, &author)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                // Human at a terminal: run interactive Q&A
+                init::run_interactive_qa(&repo_path, &result)?;
+            } else {
+                // Called by agent or piped: output JSON payload as before
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
         }
     }
 

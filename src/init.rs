@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -186,6 +186,124 @@ fn git_commit_and_push(repo_path: &Path) -> Result<()> {
 
     if !push_status.success() {
         tracing::warn!("git push origin main failed — no remote configured or push rejected; skipping");
+    }
+
+    Ok(())
+}
+
+// ─── Interactive Q&A (TTY mode) ───────────────────────────────────────────────
+
+/// Run when `init` is called from a real terminal. Asks each question
+/// interactively and writes the answers directly to their target files, then
+/// commits and pushes — so the book is fully ready in one shot.
+pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()> {
+    let total = payload.questions.len();
+
+    println!("\n  Ink Gateway — Book Setup");
+    println!("  «{}» by {}", payload.title, payload.author);
+    println!("  Answer {total} questions to configure your book.\n");
+
+    for (i, q) in payload.questions.iter().enumerate() {
+        println!("  ── [{}/{}] ─────────────────────────────────────", i + 1, total);
+        println!("  {}\n", q.question);
+
+        let answer = if q.target_file == "Global Material/Config.yml" {
+            // Language: single-line prompt with default
+            dialoguer::Input::<String>::new()
+                .with_prompt("  Language")
+                .default("English".into())
+                .interact_text()
+                .with_context(|| "Failed to read language input")?
+        } else {
+            // All other questions: open $EDITOR with the question as a comment header
+            let prefill = format!(
+                "# {}\n# Write your answer below. Delete this header. Save and close to continue.\n\n",
+                q.question
+            );
+            match dialoguer::Editor::new()
+                .extension(".md")
+                .edit(&prefill)
+                .with_context(|| "Failed to open editor")?
+            {
+                Some(text) => strip_comment_header(&text),
+                None => {
+                    println!("  (skipped — seed template kept)\n");
+                    continue;
+                }
+            }
+        };
+
+        write_qa_answer(repo_path, q.target_file, &answer)
+            .with_context(|| format!("Failed to write {}", q.target_file))?;
+        println!("  ✓  {}\n", q.target_file);
+    }
+
+    // Commit all answers
+    println!("  Committing answers…");
+    commit_qa_answers(repo_path)?;
+    println!("\n  Book is ready. Review Global Material/ in your editor and");
+    println!("  start the first writing session when satisfied.\n");
+
+    Ok(())
+}
+
+/// Strip leading `#` comment lines (and the blank line after them) that were
+/// added as an instruction header in the editor pre-fill.
+fn strip_comment_header(text: &str) -> String {
+    text.lines()
+        .skip_while(|l| l.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_start_matches('\n')
+        .to_string()
+}
+
+/// Write a Q&A answer to its target file.
+/// Config.yml is special — only the `language:` field is updated.
+/// All other files have their full contents replaced.
+fn write_qa_answer(repo_path: &Path, target_file: &str, answer: &str) -> Result<()> {
+    let path = repo_path.join(target_file);
+    if target_file == "Global Material/Config.yml" {
+        let content = fs::read_to_string(&path)?;
+        let updated = content
+            .lines()
+            .map(|line| {
+                if line.starts_with("language:") {
+                    format!("language: {}", answer.trim())
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, format!("{}\n", updated))?;
+    } else {
+        fs::write(&path, answer)?;
+    }
+    Ok(())
+}
+
+fn commit_qa_answers(repo_path: &Path) -> Result<()> {
+    let run = |args: &[&str]| -> Result<()> {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo_path)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("git {} failed", args.join(" "));
+        }
+        Ok(())
+    };
+
+    run(&["add", "-A"])?;
+    run(&["commit", "-m", "init: populate global material from author Q&A"])?;
+
+    let push = Command::new("git")
+        .args(["push", "origin", "main"])
+        .current_dir(repo_path)
+        .status()?;
+    if !push.success() {
+        tracing::warn!("git push skipped — no remote configured");
     }
 
     Ok(())
