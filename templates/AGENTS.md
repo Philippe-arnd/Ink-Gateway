@@ -53,13 +53,17 @@ ink-cli init /data/ink-gateway/books/<repo-name> \
 
 Derive `--title` from the repository name (replace hyphens and underscores with spaces, apply title case). Derive `--author` from the GitHub username in the URL or from the triggering message if it specifies one.
 
-After init, the JSON response includes a `questions` array. Each entry has `question` and `target_file` fields.
+After init, the JSON response includes a `questions` array. Each entry has `question`, `hint`, and `target_file` fields. Present the `hint` as context below each question.
 
 Present each question to the human author in order, one at a time. Once you have all answers:
 
-1. Write each answer into its `target_file`:
+1. Write answers into their `target_file`. Multiple questions may share a file — combine them as structured markdown:
    - **`Global Material/Config.yml`** — update only the `language:` field (replace the existing value on that line). Do not overwrite the rest of the file.
-   - **All other files** — write the answer as the full content of the file, replacing the seed template.
+   - **`Global Material/Soul.md`** — write as `# Soul\n\n## Genre & Tone\n\n{q_genre}\n\n## Narrator & Perspective\n\n{q_narrator}\n`
+   - **`Global Material/Characters.md`** — write as `# Characters\n\n## Protagonist\n\n{q_protag}\n\n## Antagonist / Obstacle\n\n{q_antag}\n`
+   - **`Global Material/Outline.md`** — write as `# Outline\n\n## Opening\n\n{q_open}\n\n## Midpoint\n\n{q_mid}\n\n## Ending\n\n{q_end}\n`
+   - **`Global Material/Lore.md`** — write as `# Lore\n\n## Setting\n\n{q_setting}\n`
+   - **`Chapters material/Chapter_01.md`** — write as `# Chapter 1\n\n## Beats\n\n{q_ch1}\n`
 2. Commit and push:
    ```bash
    git -C <repo-path> add -A

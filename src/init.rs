@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
+use inquire::{Confirm, Text};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -16,6 +18,7 @@ const AGENTS_MD: &str = include_str!("../templates/AGENTS.md");
 #[derive(Serialize)]
 pub struct Question {
     pub question: &'static str,
+    pub hint: &'static str,
     pub target_file: &'static str,
 }
 
@@ -61,7 +64,6 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
         fs::create_dir_all(repo_path.join(dir))?;
     }
 
-    // Helper closure to write a file and record its relative path
     let write_file = |rel: &str, contents: &str, files: &mut Vec<String>| -> Result<()> {
         let full = repo_path.join(rel);
         fs::write(&full, contents)?;
@@ -69,87 +71,75 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
         Ok(())
     };
 
-    write_file(
-        "Global Material/Config.yml",
-        &fill(CONFIG_YML, title, author),
-        &mut files_created,
-    )?;
-    write_file(
-        "Global Material/Soul.md",
-        &fill(SOUL_MD, title, author),
-        &mut files_created,
-    )?;
-    write_file(
-        "Global Material/Outline.md",
-        &fill(OUTLINE_MD, title, author),
-        &mut files_created,
-    )?;
-    write_file(
-        "Global Material/Characters.md",
-        &fill(CHARACTERS_MD, title, author),
-        &mut files_created,
-    )?;
-    write_file(
-        "Global Material/Lore.md",
-        &fill(LORE_MD, title, author),
-        &mut files_created,
-    )?;
-    // Summary.md — empty, append-only
+    write_file("Global Material/Config.yml", &fill(CONFIG_YML, title, author), &mut files_created)?;
+    write_file("Global Material/Soul.md", &fill(SOUL_MD, title, author), &mut files_created)?;
+    write_file("Global Material/Outline.md", &fill(OUTLINE_MD, title, author), &mut files_created)?;
+    write_file("Global Material/Characters.md", &fill(CHARACTERS_MD, title, author), &mut files_created)?;
+    write_file("Global Material/Lore.md", &fill(LORE_MD, title, author), &mut files_created)?;
     write_file("Global Material/Summary.md", "", &mut files_created)?;
-
-    write_file(
-        "Chapters material/Chapter_01.md",
-        &fill(CHAPTER_01_MD, title, author),
-        &mut files_created,
-    )?;
-
-    write_file(
-        "Review/current.md",
-        &fill(CURRENT_MD, title, author),
-        &mut files_created,
-    )?;
-
-    // AGENTS.md — standalone engine instructions at repo root
+    write_file("Chapters material/Chapter_01.md", &fill(CHAPTER_01_MD, title, author), &mut files_created)?;
+    write_file("Review/current.md", &fill(CURRENT_MD, title, author), &mut files_created)?;
     write_file("AGENTS.md", AGENTS_MD, &mut files_created)?;
-
-    // Changelog/.gitkeep — keeps the empty directory tracked by git
     write_file("Changelog/.gitkeep", "", &mut files_created)?;
-
-    // Full_Book.md — starts empty
     write_file("Current version/Full_Book.md", "", &mut files_created)?;
 
-    // Git operations
     git_commit_and_push(repo_path)?;
 
     let questions = vec![
+        // ── Language ──────────────────────────────────────────────────────────
         Question {
-            question: "What language should the engine write in? \
-                       (e.g. English, French, Spanish, German, Italian — use the full language name)",
+            question: "What language should the engine write in?",
+            hint: "e.g. English, French, Spanish, German — use the full language name",
             target_file: "Global Material/Config.yml",
         },
+        // ── Voice & Style ──────────────────────────────────────────────────────
         Question {
-            question: "What is the narrative voice, tone, and prose style for this book? \
-                       Describe the narrator, sentence rhythm, vocabulary level, and emotional register.",
+            question: "What is the genre and overall tone?",
+            hint: "e.g. Dark fantasy with literary prose, melancholic and immersive",
             target_file: "Global Material/Soul.md",
         },
         Question {
-            question: "What is the full plot arc — beginning, middle, and end? \
-                       Include the central conflict, major turning points, and resolution.",
-            target_file: "Global Material/Outline.md",
+            question: "What is the narrator perspective and tense?",
+            hint: "e.g. Third-person limited, past tense, close to the protagonist",
+            target_file: "Global Material/Soul.md",
         },
+        // ── Characters ─────────────────────────────────────────────────────────
         Question {
-            question: "Who are the main characters? For each: name, personality, motivation, \
-                       key relationships, and arc across the book.",
+            question: "Who is the protagonist? Give a name and one defining trait.",
+            hint: "e.g. Mara, a disgraced soldier haunted by a massacre she survived",
             target_file: "Global Material/Characters.md",
         },
         Question {
-            question: "Describe the world: its setting, history, geography, societies, \
-                       and any rules or lore the engine must respect.",
-            target_file: "Global Material/Lore.md",
+            question: "Who or what is the main antagonist or obstacle?",
+            hint: "e.g. The Conclave, a religious order that controls all magic",
+            target_file: "Global Material/Characters.md",
+        },
+        // ── Plot Arc ───────────────────────────────────────────────────────────
+        Question {
+            question: "How does the story open? What kicks it off?",
+            hint: "1-2 sentences — the inciting event that sets everything in motion",
+            target_file: "Global Material/Outline.md",
         },
         Question {
-            question: "What should happen in Chapter 1? List the key beats, scenes, \
-                       and what the reader should feel by the end of it.",
+            question: "What is the midpoint turning point?",
+            hint: "1-2 sentences — the moment that changes everything for the protagonist",
+            target_file: "Global Material/Outline.md",
+        },
+        Question {
+            question: "How does the story end?",
+            hint: "1-2 sentences — the resolution and what the protagonist gains or loses",
+            target_file: "Global Material/Outline.md",
+        },
+        // ── World & Setting ────────────────────────────────────────────────────
+        Question {
+            question: "Describe the world and setting.",
+            hint: "e.g. A crumbling empire on the edge of a magical desert, post-industrial era",
+            target_file: "Global Material/Lore.md",
+        },
+        // ── Chapter 1 ──────────────────────────────────────────────────────────
+        Question {
+            question: "What happens in Chapter 1? What should the reader feel by the end?",
+            hint: "Key scene(s) and the emotional note the chapter closes on",
             target_file: "Chapters material/Chapter_01.md",
         },
     ];
@@ -177,14 +167,14 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
         .unwrap_or("this-repository")
         .to_string();
 
-    println!("\n  ⚠  Reset will permanently delete all book content in «{}».", repo_name);
+    println!();
+    println!("  ⚠  Reset will permanently delete all book content in «{}».", repo_name);
     println!("  The git history is preserved, but all files will be removed.");
-    println!("  You can re-run `ink-cli init` afterwards to start fresh.\n");
-    println!("  To confirm, type the repository name:\n");
+    println!("  You can re-run `ink-cli init` afterwards to start fresh.");
+    println!();
 
-    let input: String = dialoguer::Input::<String>::new()
-        .with_prompt(format!("  Type «{}» to confirm", repo_name))
-        .interact_text()
+    let input = Text::new(&format!("Type «{}» to confirm", repo_name))
+        .prompt()
         .with_context(|| "Failed to read confirmation input")?;
 
     if input.trim() != repo_name {
@@ -277,93 +267,210 @@ fn git_commit_and_push(repo_path: &Path) -> Result<()> {
 
 // ─── Interactive Q&A (TTY mode) ───────────────────────────────────────────────
 
-/// Run when `init` is called from a real terminal. Asks each question
-/// interactively and writes the answers directly to their target files, then
-/// commits and pushes — so the book is fully ready in one shot.
+/// Run when `init` is called from a real terminal. Asks 10 focused questions
+/// using inline prompts, shows a summary, and commits on confirmation.
 pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()> {
-    let total = payload.questions.len();
+    // (start_index, section_label)
+    let sections: &[(usize, &str)] = &[
+        (0, "Language"),
+        (1, "Voice & Style"),
+        (3, "Characters"),
+        (5, "Plot Arc"),
+        (8, "World & Setting"),
+        (9, "Chapter 1"),
+    ];
 
-    println!("\n  Ink Gateway — Book Setup");
+    println!();
+    println!("  Ink Gateway — Book Setup");
     println!("  «{}» by {}", payload.title, payload.author);
-    println!("  Answer {total} questions to configure your book.\n");
+    println!("  10 questions — about 5 minutes.");
+    println!();
+
+    let mut answers: Vec<(usize, String)> = Vec::new();
 
     for (i, q) in payload.questions.iter().enumerate() {
-        println!("  ── [{}/{}] ─────────────────────────────────────", i + 1, total);
-        println!("  {}\n", q.question);
-
-        let answer = if q.target_file == "Global Material/Config.yml" {
-            // Language: single-line prompt with default
-            dialoguer::Input::<String>::new()
-                .with_prompt("  Language")
-                .default("English".into())
-                .interact_text()
-                .with_context(|| "Failed to read language input")?
-        } else {
-            // All other questions: open $EDITOR with the question as a comment header
-            let prefill = format!(
-                "# {}\n# Write your answer below. Delete this header. Save and close to continue.\n\n",
-                q.question
-            );
-            match dialoguer::Editor::new()
-                .extension(".md")
-                .edit(&prefill)
-                .with_context(|| "Failed to open editor")?
-            {
-                Some(text) => strip_comment_header(&text),
-                None => {
-                    println!("  (skipped — seed template kept)\n");
-                    continue;
-                }
+        // Print section header when a new section begins
+        if let Some((_, name)) = sections.iter().find(|(start, _)| *start == i) {
+            if i > 0 {
+                println!();
             }
+            println!("  ── {} {}", name, "─".repeat(48_usize.saturating_sub(name.len())));
+        }
+
+        let answer = match Text::new(q.question)
+            .with_help_message(q.hint)
+            .prompt()
+        {
+            Ok(a) => a,
+            Err(inquire::InquireError::OperationCanceled)
+            | Err(inquire::InquireError::OperationInterrupted) => {
+                println!("\n  Setup cancelled. No files were changed.");
+                return Ok(());
+            }
+            Err(e) => anyhow::bail!("Input error on question {}: {}", i + 1, e),
         };
 
-        write_qa_answer(repo_path, q.target_file, &answer)
-            .with_context(|| format!("Failed to write {}", q.target_file))?;
-        println!("  ✓  {}\n", q.target_file);
+        answers.push((i, answer));
     }
 
-    // Commit all answers
-    println!("  Committing answers…");
+    // Summary review
+    println!();
+    println!("  ── Review ───────────────────────────────────────────────────────");
+    for (i, answer) in &answers {
+        let q = &payload.questions[*i];
+        let display = if answer.trim().is_empty() { "(skipped)" } else { answer.trim() };
+        println!("  {}. {}:", i + 1, q.question);
+        println!("     {}", display);
+    }
+    println!();
+
+    let confirmed = match Confirm::new("Commit these answers and prepare the book?")
+        .with_default(true)
+        .prompt()
+    {
+        Ok(b) => b,
+        Err(inquire::InquireError::OperationCanceled)
+        | Err(inquire::InquireError::OperationInterrupted) => {
+            println!("\n  Cancelled. No files were changed.");
+            return Ok(());
+        }
+        Err(e) => anyhow::bail!("Confirmation error: {}", e),
+    };
+
+    if !confirmed {
+        println!("\n  Cancelled. Run init again to start over.");
+        return Ok(());
+    }
+
+    write_answers_to_files(repo_path, &answers)?;
     commit_qa_answers(repo_path)?;
-    println!("\n  Book is ready. Review Global Material/ in your editor and");
-    println!("  start the first writing session when satisfied.\n");
+
+    println!();
+    println!("  Book is ready.");
+    println!("  Review Global Material/ in your editor, then start the first writing session.");
+    println!();
 
     Ok(())
 }
 
-/// Strip leading `#` comment lines (and the blank line after them) that were
-/// added as an instruction header in the editor pre-fill.
-fn strip_comment_header(text: &str) -> String {
-    text.lines()
-        .skip_while(|l| l.starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim_start_matches('\n')
-        .to_string()
-}
+/// Aggregate answers (by question index) and write them as structured markdown
+/// to their respective target files. Multiple answers targeting the same file
+/// are combined under section headings.
+fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Result<()> {
+    let map: HashMap<usize, &str> = answers
+        .iter()
+        .map(|(i, a)| (*i, a.as_str()))
+        .collect();
 
-/// Write a Q&A answer to its target file.
-/// Config.yml is special — only the `language:` field is updated.
-/// All other files have their full contents replaced.
-fn write_qa_answer(repo_path: &Path, target_file: &str, answer: &str) -> Result<()> {
-    let path = repo_path.join(target_file);
-    if target_file == "Global Material/Config.yml" {
-        let content = fs::read_to_string(&path)?;
+    // Config.yml — update `language:` field only (q0)
+    if let Some(&lang) = map.get(&0) {
+        let path = repo_path.join("Global Material/Config.yml");
+        let content = fs::read_to_string(&path)
+            .with_context(|| "Failed to read Config.yml")?;
         let updated = content
             .lines()
             .map(|line| {
                 if line.starts_with("language:") {
-                    format!("language: {}", answer.trim())
+                    format!("language: {}", lang.trim())
                 } else {
                     line.to_string()
                 }
             })
             .collect::<Vec<_>>()
             .join("\n");
-        fs::write(&path, format!("{}\n", updated))?;
-    } else {
-        fs::write(&path, answer)?;
+        fs::write(&path, format!("{}\n", updated))
+            .with_context(|| "Failed to write Config.yml")?;
     }
+
+    // Soul.md — genre/tone (q1) + narrator/perspective (q2)
+    {
+        let genre = map.get(&1).copied().unwrap_or("").trim().to_string();
+        let narrator = map.get(&2).copied().unwrap_or("").trim().to_string();
+        if !genre.is_empty() || !narrator.is_empty() {
+            let mut content = String::from("# Soul\n");
+            if !genre.is_empty() {
+                content.push_str("\n## Genre & Tone\n\n");
+                content.push_str(&genre);
+                content.push('\n');
+            }
+            if !narrator.is_empty() {
+                content.push_str("\n## Narrator & Perspective\n\n");
+                content.push_str(&narrator);
+                content.push('\n');
+            }
+            fs::write(repo_path.join("Global Material/Soul.md"), content)
+                .with_context(|| "Failed to write Soul.md")?;
+        }
+    }
+
+    // Characters.md — protagonist (q3) + antagonist (q4)
+    {
+        let protag = map.get(&3).copied().unwrap_or("").trim().to_string();
+        let antag = map.get(&4).copied().unwrap_or("").trim().to_string();
+        if !protag.is_empty() || !antag.is_empty() {
+            let mut content = String::from("# Characters\n");
+            if !protag.is_empty() {
+                content.push_str("\n## Protagonist\n\n");
+                content.push_str(&protag);
+                content.push('\n');
+            }
+            if !antag.is_empty() {
+                content.push_str("\n## Antagonist / Obstacle\n\n");
+                content.push_str(&antag);
+                content.push('\n');
+            }
+            fs::write(repo_path.join("Global Material/Characters.md"), content)
+                .with_context(|| "Failed to write Characters.md")?;
+        }
+    }
+
+    // Outline.md — opening (q5) + midpoint (q6) + ending (q7)
+    {
+        let opening = map.get(&5).copied().unwrap_or("").trim().to_string();
+        let midpoint = map.get(&6).copied().unwrap_or("").trim().to_string();
+        let ending = map.get(&7).copied().unwrap_or("").trim().to_string();
+        if !opening.is_empty() || !midpoint.is_empty() || !ending.is_empty() {
+            let mut content = String::from("# Outline\n");
+            if !opening.is_empty() {
+                content.push_str("\n## Opening\n\n");
+                content.push_str(&opening);
+                content.push('\n');
+            }
+            if !midpoint.is_empty() {
+                content.push_str("\n## Midpoint\n\n");
+                content.push_str(&midpoint);
+                content.push('\n');
+            }
+            if !ending.is_empty() {
+                content.push_str("\n## Ending\n\n");
+                content.push_str(&ending);
+                content.push('\n');
+            }
+            fs::write(repo_path.join("Global Material/Outline.md"), content)
+                .with_context(|| "Failed to write Outline.md")?;
+        }
+    }
+
+    // Lore.md — world/setting (q8)
+    if let Some(&setting) = map.get(&8) {
+        let setting = setting.trim();
+        if !setting.is_empty() {
+            let content = format!("# Lore\n\n## Setting\n\n{}\n", setting);
+            fs::write(repo_path.join("Global Material/Lore.md"), content)
+                .with_context(|| "Failed to write Lore.md")?;
+        }
+    }
+
+    // Chapter_01.md — beats (q9)
+    if let Some(&beats) = map.get(&9) {
+        let beats = beats.trim();
+        if !beats.is_empty() {
+            let content = format!("# Chapter 1\n\n## Beats\n\n{}\n", beats);
+            fs::write(repo_path.join("Chapters material/Chapter_01.md"), content)
+                .with_context(|| "Failed to write Chapter_01.md")?;
+        }
+    }
+
     Ok(())
 }
 

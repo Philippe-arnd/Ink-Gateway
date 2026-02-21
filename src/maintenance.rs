@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use dialoguer;
+use inquire::Confirm;
 use chrono::Local;
 use serde::Serialize;
 use std::path::Path;
@@ -236,10 +236,9 @@ pub fn rollback_session(repo_path: &Path) -> Result<()> {
     println!("  This will permanently remove the last session's prose,");
     println!("  Summary.md entry, and Changelog entry, then force-push.");
 
-    let confirmed = dialoguer::Confirm::new()
-        .with_prompt("\n  Confirm rollback")
-        .default(false)
-        .interact()
+    let confirmed = Confirm::new("Confirm rollback?")
+        .with_default(false)
+        .prompt()
         .with_context(|| "Failed to read confirmation")?;
 
     if !confirmed {
