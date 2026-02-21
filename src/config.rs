@@ -18,6 +18,10 @@ fn default_current_chapter() -> u32 {
     1
 }
 
+fn default_words_per_page() -> u32 {
+    250
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Config {
@@ -33,6 +37,8 @@ pub struct Config {
     pub current_chapter: u32,
     #[serde(default = "default_session_timeout_minutes")]
     pub session_timeout_minutes: i64,
+    #[serde(default = "default_words_per_page")]
+    pub words_per_page: u32,
 }
 
 impl Config {

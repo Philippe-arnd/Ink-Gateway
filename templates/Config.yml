@@ -34,6 +34,10 @@ summary_context_entries: 5
 # Only the current chapter and the next one are loaded into context each session.
 current_chapter: 1
 
+# Approximate number of words per page for pagination markers in Full_Book.md.
+# Standard paperback: 250. Large print: 150. Dense literary: 300.
+words_per_page: 250
+
 # Maximum wall-clock minutes a session lock is considered valid.
 # If .ink-running is older than this, session-open treats it as a crashed/killed session
 # and removes the stale lock automatically before proceeding.

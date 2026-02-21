@@ -118,10 +118,11 @@ Follow this sequence exactly, every session:
 
 1. **Open** — Call `session_open` with the repo path.
 2. **Abort checks** — Evaluate the payload fields in this order (see §Abort Rules).
-3. **Plan** — Read `human_edits` and `current.instructions`. Adapt your generation plan.
-4. **Generate** — Write exactly `config.words_per_session` words of prose.
-5. **Close** — Call `session_close` with the prose on stdin and optional flags.
-6. **Complete (conditional)** — If `completion_ready` is `true` AND you confirm narrative closure, call `complete`.
+3. **Analyse** — Read `current_review.content` and `current_review.instructions`. Identify what the author changed and what they are asking for.
+4. **Consistency check** — Cross-reference any planned changes against `Soul.md`, `Outline.md`, `Characters.md`, `Lore.md`, and `chapters.current`. Make sure the planned prose is coherent with the global arc and chapter goals.
+5. **Generate** — Write `config.words_per_session` words of prose as the new `current.md` content (see §current.md Contract).
+6. **Close** — Call `session_close` with the prose on stdin and optional flags.
+7. **Complete (conditional)** — If `completion_ready` is `true` AND you confirm narrative closure, call `complete`.
 
 ---
 
@@ -148,9 +149,9 @@ Check these in order immediately after `session_open`. Stop before any generatio
 | `global_material[]` | All files in `Global Material/` — soul, outline, characters, lore, summary |
 | `chapters.current` | Active chapter outline (`config.current_chapter`) |
 | `chapters.next` | Next chapter outline (look-ahead only) |
-| `current_review.content` | Previous session's prose — your continuation point |
+| `current_review.content` | Contents of `Review/current.md` — last session's prose window, your starting point |
 | `current_review.instructions` | `<!-- INK: ... -->` directives extracted from `current.md` |
-| `word_count` | `{ total, target, remaining }` computed from `Full_Book.md` |
+| `word_count` | `{ total, target, remaining }` computed from `Full_Book.md` (validated prose only) |
 | `human_edits` | Files the author modified since the last session |
 | `snapshot_tag` | Git tag created for this session (for your logs) |
 
@@ -168,45 +169,60 @@ Read `human_edits` from the payload. Adapt accordingly:
 
 ---
 
-## INK Instruction Processing
+## current.md Contract
 
-Read `current_review.instructions`. Each entry has:
-- `anchor` — up to 200 characters of text preceding the instruction comment
+`current.md` is the **rolling prose window** — a living document shared between you and the author.
+
+### What you receive (via `current_review.content`)
+The file may contain:
+- **Clean prose** (validated by the author — kept as-is above the first INK instruction)
+- **`<!-- INK:REWORKED:START -->` ... `<!-- INK:REWORKED:END -->`** — passages you rewrote last session
+- **`<!-- INK:NEW:START -->` ... `<!-- INK:NEW:END -->`** — new prose you added last session
+- **`<!-- INK: [instruction] -->`** — author directives placed anywhere in the file
+
+### The split rule
+Everything **before** the first `<!-- INK: [instruction] -->` tag is **validated** — the author accepted it. On `session_close`, `ink-cli` automatically extracts this validated section and appends it to `Full_Book.md`. You do not need to manage this split.
+
+### What you write (sent via stdin to `session_close`)
+Your output IS the new `current.md`. It must contain:
+
+1. **Reworked passages** (for each INK instruction found): wrap each with
+   ```
+   <!-- INK:REWORKED:START -->
+   {rewritten passage — do NOT include the original INK instruction comment}
+   <!-- INK:REWORKED:END -->
+   ```
+
+2. **New continuation prose** (the `words_per_session` continuation): wrap with
+   ```
+   <!-- INK:NEW:START -->
+   {new prose}
+   <!-- INK:NEW:END -->
+   ```
+
+Order: reworked blocks first, then the new continuation block. The author's markdown editor renders these markers visually, making it easy to review the delta at a glance.
+
+### INK Instruction Processing
+
+`current_review.instructions` contains each directive found in `current.md`. Each entry has:
+- `anchor` — up to 200 characters of text preceding the instruction comment (use this to locate the passage)
 - `instruction` — the directive from the author
 
 For each instruction:
-1. Locate the `anchor` passage in `current_review.content`.
-2. Apply the instruction as a targeted rewrite of that passage.
-3. Incorporate the rewritten passage into your final prose output.
-
-The `<!-- INK: ... -->` comments are already stripped from `current_review.content` — no cleanup needed.
+1. Locate the passage using `anchor` in `current_review.content`.
+2. Rewrite that passage according to `instruction`.
+3. Emit it in a `<!-- INK:REWORKED:START/END -->` block.
 
 ---
 
 ## Narrative Generation
 
-- **Anchor point:** Continue from `current_review.content`. The last paragraph is your bridge.
+- **Anchor point:** The last paragraph of `current_review.content` (after all rewrites) is your bridge into new prose.
 - **Chapter scope:** Follow `chapters.current` for the active chapter's goals and beats.
 - **Look-ahead:** Consult `chapters.next` at chapter boundaries for narrative coherence.
 - **Voice:** Adhere strictly to `Soul.md` — narrator tone, style, sentence rhythm, vocabulary.
 - **Arc:** Every session advances the plot arc defined in `Outline.md`.
-- **Length:** Generate exactly `config.words_per_session` words.
-
----
-
-## Prose Markup — New Content and Reworked Passages
-
-`session-close` automatically wraps everything you send via stdin in `<!-- INK:NEW:START -->` / `<!-- INK:NEW:END -->` markers in `Full_Book.md`. This lets the author see at a glance what was added in this session.
-
-If you rewrote a passage in response to an `<!-- INK: ... -->` instruction, wrap only that reworked section in your output:
-
-```
-<!-- INK:REWORKED:START -->
-{revised text, replacing the passage where the INK comment appeared}
-<!-- INK:REWORKED:END -->
-```
-
-Place reworked blocks before the new continuation prose. The author's markdown editor will render them visually distinct. Do **not** add `INK:NEW` tags yourself — `session-close` adds them around everything.
+- **Length:** Generate `config.words_per_session` words of new prose (rework blocks do not count toward this).
 
 ---
 
