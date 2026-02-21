@@ -53,6 +53,69 @@ COMPLETE               # Written by engine when book is finished (triggers cron 
 5. **Close** — `session-close` (prose via stdin): write `current.md`, append `Summary.md`, write `Changelog/`, append `Full_Book.md`, push
 6. **Complete (conditional)** — If word count within ±10% of target AND arcs fulfilled → write `COMPLETE` → cron self-deleted
 
+## CLI Reference
+
+```
+ink-cli <SUBCOMMAND>
+```
+
+### `init` — Scaffold a new book
+
+```bash
+ink-cli init <repo-path> --title "<Book Title>" --author "<Author Name>"
+```
+
+Run once per book in an existing git repository.
+
+- **TTY (human)** — launches an interactive setup: single-line prompt for language, then opens `$EDITOR` for each remaining question (voice, plot arc, characters, world, Chapter 1). Writes answers to the corresponding files, commits, and pushes — book ready in one shot.
+- **Non-TTY (agent / pipe)** — outputs a JSON payload with `status`, `files_created`, and a `questions` array for the agent to process.
+
+### `session-open` — Start a writing session
+
+```bash
+ink-cli session-open <repo-path>
+```
+
+Fetches from origin, detects and commits local human edits (including uncommitted IDE saves), fast-forward merges origin, creates a snapshot tag, acquires the session lock, and loads all context. Outputs a JSON payload.
+
+**Abort fields** (check before generating):
+
+| Field | Meaning |
+|---|---|
+| `kill_requested` | Author created `.ink-kill` — abort immediately |
+| `session_already_run` | Active lock exists — another session is running |
+| `stale_lock_recovered` | Crashed lock was cleaned up — proceed normally |
+
+### `session-close` — End a writing session
+
+```bash
+echo "$prose" | ink-cli session-close <repo-path> \
+  --summary "One-paragraph narrative summary" \
+  --human-edit "Chapters material/Chapter_03.md"   # repeatable
+```
+
+Reads generated prose from stdin, writes `Review/current.md`, appends `Summary.md` and `Full_Book.md`, writes a `Changelog/` entry, releases the lock, and pushes `main` + `draft`. Returns:
+
+```json
+{
+  "session_word_count": 1487,
+  "total_word_count": 43210,
+  "target_length": 90000,
+  "completion_ready": false,
+  "status": "closed"
+}
+```
+
+### `complete` — Mark book as finished
+
+```bash
+ink-cli complete <repo-path>
+```
+
+Writes the `COMPLETE` marker, commits, and pushes. Call only when `completion_ready` is `true` **and** narrative arcs are genuinely fulfilled. Returns `{ "status": "complete", "total_word_count": N }`.
+
+---
+
 ## Starting a New Book
 
 **1. Scaffold the repository** — run once in any existing git repo:
