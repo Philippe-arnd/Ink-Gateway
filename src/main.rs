@@ -1,6 +1,7 @@
 mod config;
 mod context;
 mod git;
+mod init;
 mod maintenance;
 
 use anyhow::{Context, Result};
@@ -39,6 +40,17 @@ enum Commands {
         /// Path to the book repository
         repo_path: PathBuf,
     },
+    /// Scaffold a new book repository with all required files and directories
+    Init {
+        /// Path to the book repository (must be an existing git repo)
+        repo_path: PathBuf,
+        /// Book title substituted into all template files
+        #[arg(long, default_value = "Untitled")]
+        title: String,
+        /// Author name substituted into all template files
+        #[arg(long, default_value = "Unknown")]
+        author: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -70,6 +82,10 @@ fn main() -> Result<()> {
         }
         Commands::Complete { repo_path } => {
             let result = maintenance::complete_session(&repo_path)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Commands::Init { repo_path, title, author } => {
+            let result = init::run_init(&repo_path, &title, &author)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
