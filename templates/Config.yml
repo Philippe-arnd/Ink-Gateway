@@ -29,10 +29,16 @@ words_per_session: 1500
 # Keeps input token usage bounded as the book grows.
 summary_context_entries: 5
 
-# The chapter currently being written (1-indexed).
-# Increment this value (via the editor) when you are satisfied a chapter is complete.
-# Only the current chapter and the next one are loaded into context each session.
-current_chapter: 1
+# Target words per chapter. Used to suggest chapter close (±10% threshold).
+# When session-open detects the chapter is at or above 90% of this target, it sets
+# chapter_close_suggested: true in the payload — the engine then calls advance-chapter.
+words_per_chapter: 3000
+
+# Maximum words from Review/current.md to include in the session payload.
+# Limits token usage when the rolling window has grown large. Truncation happens
+# at paragraph boundaries so prose context is never cut mid-sentence.
+# Set to 0 for no limit (default — safe for all book sizes).
+current_review_window_words: 0
 
 # Approximate number of words per page for pagination markers in Full_Book.md.
 # Standard paperback: 250. Large print: 150. Dense literary: 300.

@@ -1,12 +1,25 @@
 use anyhow::{Context, Result};
 use inquire::Confirm;
 use chrono::Local;
+use regex::Regex;
 use serde::Serialize;
 use std::path::Path;
+use std::sync::OnceLock;
 use tracing::info;
 
 use crate::config::Config;
 use crate::git;
+use crate::state::InkState;
+
+// ─── Shared regex (compiled once) ────────────────────────────────────────────
+
+/// Returns the compiled regex for author INK instructions.
+/// The mandatory space after `INK:` ensures engine markers are never matched.
+/// Must stay consistent with context.rs.
+fn ink_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"<!-- INK: (.*?) -->").unwrap())
+}
 
 // ─── Output types ─────────────────────────────────────────────────────────────
 
@@ -16,13 +29,8 @@ pub struct ClosePayload {
     pub total_word_count: u32,
     pub target_length: u32,
     pub completion_ready: bool,
+    pub current_chapter_word_count: u32,
     pub status: &'static str,
-}
-
-#[derive(Serialize)]
-pub struct CompletePayload {
-    pub status: &'static str,
-    pub total_word_count: u32,
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -49,8 +57,52 @@ fn find_first_ink_instruction(content: &str) -> Option<usize> {
     None
 }
 
-/// Count prose words, ignoring HTML comment lines.
-fn count_prose_words(content: &str) -> u32 {
+/// Extract author INK instructions from `content`.
+/// Returns (content with all `<!-- INK: ... -->` comments removed, Vec<(anchor, instruction)>).
+/// The mandatory space after `INK:` ensures engine markers (`<!-- INK:NEW: -->`) are never matched.
+fn extract_author_instructions(content: &str) -> (String, Vec<(String, String)>) {
+    let re = ink_re();
+    let mut instructions: Vec<(String, String)> = Vec::new();
+
+    for cap in re.captures_iter(content) {
+        let full_match = cap.get(0).expect("full match");
+        let instruction = cap[1].trim().to_string();
+
+        // Anchor = last 200 chars of text preceding the comment (mirrors context.rs)
+        let preceding = content[..full_match.start()].trim_end();
+        let anchor_start = if preceding.len() > 200 { preceding.len() - 200 } else { 0 };
+        let anchor = preceding[anchor_start..].to_string();
+
+        instructions.push((anchor, instruction));
+    }
+
+    let stripped = re.replace_all(content, "").to_string();
+    (stripped, instructions)
+}
+
+/// Strip engine-generated INK markers from prose before it enters Full_Book.md.
+/// Per spec, `<!-- INK:NEW:START/END -->` and `<!-- INK:REWORKED:START/END -->` markers
+/// live only in `current.md` and must never appear in the validated vault.
+fn strip_engine_markers(text: &str) -> String {
+    text.lines()
+        .filter(|l| {
+            let t = l.trim();
+            !matches!(
+                t,
+                "<!-- INK:NEW:START -->"
+                    | "<!-- INK:NEW:END -->"
+                    | "<!-- INK:REWORKED:START -->"
+                    | "<!-- INK:REWORKED:END -->"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Count prose words, ignoring HTML comment lines (e.g. `<!-- PAGE N -->`).
+/// Used by both session-close (maintenance) and session-open word_count (context)
+/// so both always report the same figure.
+pub fn count_prose_words(content: &str) -> u32 {
     content
         .lines()
         .filter(|l| !l.trim_start().starts_with("<!--"))
@@ -90,6 +142,36 @@ fn insert_pagination(start_word_count: u32, new_content: &str, words_per_page: u
     }
 
     chunks.join("\n\n")
+}
+
+/// Append `content` to `Full_Book.md` at `book_path` with pagination markers.
+/// Creates the file (with managed header) if it doesn't exist.
+/// Returns `(old_word_count, new_word_count)` — both computed in a single read,
+/// so callers don't need a separate pre-read to calculate words_added.
+fn append_to_full_book(book_path: &Path, content: &str, words_per_page: u32) -> Result<(u32, u32)> {
+    let mut book = if book_path.exists() {
+        std::fs::read_to_string(book_path)
+            .with_context(|| "Failed to read Full_Book.md")?
+    } else {
+        format!("{}\n", FULL_BOOK_HEADER)
+    };
+
+    let old_words = count_prose_words(&book);
+    let paginated = insert_pagination(old_words, content.trim(), words_per_page);
+
+    if !book.ends_with('\n') {
+        book.push('\n');
+    }
+    book.push('\n');
+    book.push_str(&paginated);
+    if !book.ends_with('\n') {
+        book.push('\n');
+    }
+
+    let new_words = count_prose_words(&book);
+    std::fs::write(book_path, &book)
+        .with_context(|| "Failed to write Full_Book.md")?;
+    Ok((old_words, new_words))
 }
 
 // ─── session-close ─────────────────────────────────────────────────────────────
@@ -138,40 +220,30 @@ pub fn close_session(
         .with_context(|| "Failed to create 'Current version/'")?;
     let book_path = book_dir.join("Full_Book.md");
 
-    let total_word_count = if !validated.trim().is_empty() {
-        let mut book = if book_path.exists() {
-            std::fs::read_to_string(&book_path)
-                .with_context(|| "Failed to read Full_Book.md")?
-        } else {
-            format!("{}\n", FULL_BOOK_HEADER)
-        };
+    // Strip engine markers before appending — they belong only in current.md.
+    let validated = strip_engine_markers(&validated);
 
-        let existing_prose_words = count_prose_words(&book);
-        let paginated = insert_pagination(existing_prose_words, validated.trim(), config.words_per_page);
-
-        if !book.ends_with('\n') {
-            book.push('\n');
-        }
-        book.push('\n');
-        book.push_str(&paginated);
-        if !book.ends_with('\n') {
-            book.push('\n');
-        }
-
-        let total = count_prose_words(&book);
-        std::fs::write(&book_path, &book)
-            .with_context(|| "Failed to write Full_Book.md")?;
-        total
+    // append_to_full_book returns (old_words, new_words) from a single file read,
+    // eliminating the separate pre-read that was needed before.
+    let (old_total, total_word_count) = if !validated.trim().is_empty() {
+        append_to_full_book(&book_path, validated.trim(), config.words_per_page)?
     } else {
-        // Nothing validated this session — just report current word count
-        if book_path.exists() {
-            let content = std::fs::read_to_string(&book_path)
-                .with_context(|| "Failed to read Full_Book.md")?;
-            count_prose_words(&content)
+        // Nothing validated: no words added; report current book word count
+        let existing = if book_path.exists() {
+            count_prose_words(&std::fs::read_to_string(&book_path)
+                .with_context(|| "Failed to read Full_Book.md")?)
         } else {
             0
-        }
+        };
+        (existing, existing)
     };
+
+    // ── Step 2b: Update chapter word count in .ink-state.yml ────────────────
+    info!("Updating chapter word count in .ink-state.yml");
+    let words_added = total_word_count.saturating_sub(old_total);
+    let mut state = InkState::load(repo)?;
+    state.current_chapter_word_count += words_added;
+    state.save(repo)?;
 
     // ── Step 3: Write new current.md = engine prose (REWORKED + NEW blocks) ──
     info!("Writing new Review/current.md");
@@ -255,13 +327,16 @@ pub fn close_session(
         total_word_count,
         target_length: config.target_length,
         completion_ready,
+        current_chapter_word_count: state.current_chapter_word_count,
         status: "closed",
     })
 }
 
 // ─── complete ─────────────────────────────────────────────────────────────────
 
-pub fn complete_session(repo: &Path) -> Result<CompletePayload> {
+/// Check for pending author INK instructions in current.md.
+/// Returns `needs_revision` JSON if any found, or finalizes and returns `complete` JSON.
+pub fn complete_session(repo: &Path) -> Result<serde_json::Value> {
     let complete_path = repo.join("COMPLETE");
 
     // Guard: COMPLETE must not already exist
@@ -275,40 +350,147 @@ pub fn complete_session(repo: &Path) -> Result<CompletePayload> {
     git::run_git(repo, &["checkout", "main"])
         .with_context(|| "Failed to checkout main for complete")?;
 
-    // Write COMPLETE marker
-    info!("Writing COMPLETE marker");
-    std::fs::write(&complete_path, "")
-        .with_context(|| "Failed to write COMPLETE")?;
+    // Read current.md
+    let current_md_path = repo.join("Review").join("current.md");
+    let current_content = if current_md_path.exists() {
+        std::fs::read_to_string(&current_md_path)
+            .with_context(|| "Failed to read Review/current.md")?
+    } else {
+        String::new()
+    };
 
-    // Remove stale .ink-running if still present
+    // Check for pending author INK instructions
+    let (stripped_content, instructions) = extract_author_instructions(&current_content);
+
+    if !instructions.is_empty() {
+        // Pending revisions — engine must run another session loop before finalizing
+        let instructions_json: Vec<serde_json::Value> = instructions
+            .into_iter()
+            .map(|(anchor, instruction)| serde_json::json!({
+                "anchor": anchor,
+                "instruction": instruction,
+            }))
+            .collect();
+
+        return Ok(serde_json::json!({
+            "status": "needs_revision",
+            "current_review": {
+                "content": stripped_content,
+                "instructions": instructions_json,
+            }
+        }));
+    }
+
+    // ── No instructions: finalize the book ───────────────────────────────────
+    info!("No pending INK instructions — finalizing book");
+
+    // Strip engine markers before the final append — they must not appear in Full_Book.md.
+    let current_content = strip_engine_markers(&current_content);
+
+    // Append entire current.md to Full_Book.md (it's all validated at this point)
+    let config = Config::load(repo)?;
+    let book_dir = repo.join("Current version");
+    std::fs::create_dir_all(&book_dir)
+        .with_context(|| "Failed to create 'Current version/'")?;
+    let book_path = book_dir.join("Full_Book.md");
+
+    let total_word_count = if !current_content.trim().is_empty() {
+        let (_, new_total) = append_to_full_book(&book_path, &current_content, config.words_per_page)?;
+        new_total
+    } else {
+        if book_path.exists() {
+            let content = std::fs::read_to_string(&book_path)
+                .with_context(|| "Failed to read Full_Book.md for word count")?;
+            count_prose_words(&content)
+        } else {
+            0
+        }
+    };
+
+    // Write completion placeholder to current.md
+    let placeholder = "<!-- Book complete. This file is sealed. See Full_Book.md for the final text. -->";
+    std::fs::write(&current_md_path, placeholder)
+        .with_context(|| "Failed to write completion placeholder to Review/current.md")?;
+
+    // Remove stale .ink-running lock if present
     let lock_path = repo.join(".ink-running");
     if lock_path.exists() {
         git::run_git(repo, &["rm", "-f", ".ink-running"])
             .with_context(|| "Failed to git rm .ink-running")?;
     }
 
-    // Count total prose words
-    let book_path = repo.join("Current version").join("Full_Book.md");
-    let total_word_count = if book_path.exists() {
-        let content = std::fs::read_to_string(&book_path)
-            .with_context(|| "Failed to read Full_Book.md for word count")?;
-        count_prose_words(&content)
-    } else {
-        0
-    };
+    // Write COMPLETE marker
+    info!("Writing COMPLETE marker");
+    std::fs::write(&complete_path, "")
+        .with_context(|| "Failed to write COMPLETE")?;
 
     // Commit and push
     git::run_git(repo, &["add", "-A"])
-        .with_context(|| "Failed to git add COMPLETE")?;
-    git::run_git(repo, &["commit", "-m", "book: complete"])
+        .with_context(|| "Failed to git add for final seal")?;
+    git::run_git(repo, &["commit", "-m", "book: complete — final seal"])
         .with_context(|| "Failed to commit completion")?;
     git::run_git(repo, &["push", "origin", "main"])
         .with_context(|| "Failed to push completion")?;
 
-    Ok(CompletePayload {
-        status: "complete",
-        total_word_count,
-    })
+    Ok(serde_json::json!({
+        "status": "complete",
+        "total_word_count": total_word_count,
+    }))
+}
+
+// ─── advance-chapter ──────────────────────────────────────────────────────────
+
+/// Advance to the next chapter by updating `.ink-state.yml`.
+/// Returns `needs_chapter_outline` if the next chapter file is missing,
+/// or `advanced` with the new chapter content on success.
+/// Does NOT push — session-close handles all pushes.
+pub fn advance_chapter(repo: &Path) -> Result<serde_json::Value> {
+    let config = Config::load(repo)?;
+    let mut state = InkState::load(repo)?;
+
+    let next_chapter = state.current_chapter + 1;
+
+    if next_chapter > config.chapter_count {
+        return Ok(serde_json::json!({
+            "status": "error",
+            "message": format!("Already at last chapter ({}/{})", state.current_chapter, config.chapter_count),
+        }));
+    }
+
+    let chapter_filename = format!("Chapter_{:02}.md", next_chapter);
+    let chapter_rel = format!("Chapters material/{}", chapter_filename);
+    let chapter_path = repo.join(&chapter_rel);
+
+    if !chapter_path.exists() {
+        return Ok(serde_json::json!({
+            "status": "needs_chapter_outline",
+            "chapter": next_chapter,
+            "chapter_file": chapter_rel,
+        }));
+    }
+
+    let chapter_content = std::fs::read_to_string(&chapter_path)
+        .with_context(|| format!("Failed to read {}", chapter_rel))?;
+
+    // Advance state
+    state.current_chapter = next_chapter;
+    state.current_chapter_word_count = 0;
+    state.save(repo)?;
+
+    // Commit the state update (and chapter file in case it was just created)
+    git::run_git(repo, &["add", ".ink-state.yml", &chapter_rel])
+        .with_context(|| "Failed to git add for chapter advance")?;
+    git::run_git(repo, &["commit", "-m", &format!("chapter: advance to chapter {}", next_chapter)])
+        .with_context(|| "Failed to commit chapter advance")?;
+
+    info!("Advanced to chapter {}", next_chapter);
+
+    Ok(serde_json::json!({
+        "status": "advanced",
+        "new_chapter": next_chapter,
+        "chapter_file": chapter_rel,
+        "chapter_content": chapter_content,
+    }))
 }
 
 // ─── rollback ─────────────────────────────────────────────────────────────────

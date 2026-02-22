@@ -3,6 +3,7 @@ mod context;
 mod git;
 mod init;
 mod maintenance;
+mod state;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -61,6 +62,11 @@ enum Commands {
         #[arg(long, default_value = "Unknown")]
         author: String,
     },
+    /// Advance to the next chapter, resetting the chapter word count
+    AdvanceChapter {
+        /// Path to the book repository
+        repo_path: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -109,6 +115,10 @@ fn main() -> Result<()> {
                 // Called by agent or piped: output JSON payload as before
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
+        }
+        Commands::AdvanceChapter { repo_path } => {
+            let result = maintenance::advance_chapter(&repo_path)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
 

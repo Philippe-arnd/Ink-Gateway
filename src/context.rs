@@ -3,11 +3,22 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
 use std::path::Path;
+use std::sync::OnceLock;
 use tracing::{info, warn};
-use walkdir::WalkDir;
 
 use crate::config::Config;
 use crate::git;
+use crate::state::InkState;
+
+// ─── Shared regex (compiled once) ────────────────────────────────────────────
+
+/// Returns the compiled regex for author INK instructions.
+/// The mandatory space after `INK:` ensures engine markers are never matched.
+/// Must stay consistent with maintenance.rs.
+fn ink_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"<!-- INK: (.*?) -->").unwrap())
+}
 
 // ─── Output types ────────────────────────────────────────────────────────────
 
@@ -61,6 +72,8 @@ pub struct SessionPayload {
     pub chapters: Chapters,
     pub current_review: CurrentReview,
     pub word_count: WordCount,
+    pub chapter_close_suggested: bool,
+    pub current_chapter_word_count: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,18 +83,20 @@ pub struct ConfigSnapshot {
     pub chapter_structure: String,
     pub words_per_session: u32,
     pub summary_context_entries: usize,
+    pub words_per_chapter: u32,
     pub current_chapter: u32,
 }
 
-impl From<&Config> for ConfigSnapshot {
-    fn from(c: &Config) -> Self {
+impl ConfigSnapshot {
+    fn new(config: &Config, current_chapter: u32) -> Self {
         ConfigSnapshot {
-            target_length: c.target_length,
-            chapter_count: c.chapter_count,
-            chapter_structure: c.chapter_structure.clone(),
-            words_per_session: c.words_per_session,
-            summary_context_entries: c.summary_context_entries,
-            current_chapter: c.current_chapter,
+            target_length: config.target_length,
+            chapter_count: config.chapter_count,
+            chapter_structure: config.chapter_structure.clone(),
+            words_per_session: config.words_per_session,
+            summary_context_entries: config.summary_context_entries,
+            words_per_chapter: config.words_per_chapter,
+            current_chapter,
         }
     }
 }
@@ -122,7 +137,11 @@ pub fn create_lock(repo: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Removes a stale lock file (local only, no git op needed — overwritten by create_lock next).
+/// Removes the stale lock from the local filesystem only.
+/// Safe because `create_lock` (called immediately after) stages a fresh `.ink-running`
+/// with the current timestamp and pushes it, overwriting whatever was on the remote.
+/// Do NOT use this on the kill path — use `git rm --ignore-unmatch .ink-running` there
+/// so the removal is committed and pushed before returning.
 pub fn remove_stale_lock(repo: &Path) -> Result<()> {
     let path = lock_path(repo);
     if path.exists() {
@@ -149,12 +168,10 @@ pub fn delete_kill_file(repo: &Path) -> Result<()> {
 
 pub fn load_global_material(repo: &Path, summary_entries: usize) -> Result<Vec<FileContent>> {
     let global_dir = repo.join("Global Material");
-    let mut files: Vec<FileContent> = WalkDir::new(&global_dir)
-        .min_depth(1)
-        .max_depth(1)
-        .into_iter()
+    let mut files: Vec<FileContent> = std::fs::read_dir(&global_dir)
+        .with_context(|| format!("Failed to read Global Material/ at {}", global_dir.display()))?
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
         .filter_map(|e| {
             let path = e.path();
             let filename = path.file_name()?.to_string_lossy().to_string();
@@ -162,7 +179,7 @@ pub fn load_global_material(repo: &Path, summary_entries: usize) -> Result<Vec<F
             if filename == "Config.yml" {
                 return None;
             }
-            let mut content = std::fs::read_to_string(path).ok()?;
+            let mut content = std::fs::read_to_string(&path).ok()?;
             if filename == "Summary.md" {
                 content = truncate_summary(&content, summary_entries);
             }
@@ -174,15 +191,57 @@ pub fn load_global_material(repo: &Path, summary_entries: usize) -> Result<Vec<F
     Ok(files)
 }
 
+/// The minimum word count for a Summary.md paragraph to be considered substantive.
+/// One-liner auto-generated entries ("Session X — N words written.") are filtered out
+/// so that `summary_context_entries` selects meaningful narrative paragraphs.
+const MIN_SUMMARY_PARAGRAPH_WORDS: usize = 15;
+
 pub fn truncate_summary(text: &str, n: usize) -> String {
-    let paragraphs: Vec<&str> = text
+    let all: Vec<&str> = text
         .split("\n\n")
         .map(|p| p.trim())
         .filter(|p| !p.is_empty())
         .collect();
 
-    let start = paragraphs.len().saturating_sub(n);
-    paragraphs[start..].join("\n\n")
+    // Prefer substantive paragraphs; fall back to all if none qualify
+    let substantive: Vec<&str> = all
+        .iter()
+        .filter(|p| p.split_whitespace().count() >= MIN_SUMMARY_PARAGRAPH_WORDS)
+        .copied()
+        .collect();
+
+    let pool = if substantive.is_empty() { &all } else { &substantive };
+    let start = pool.len().saturating_sub(n);
+    pool[start..].join("\n\n")
+}
+
+/// Truncate `text` to at most `max_words` prose words, respecting paragraph boundaries.
+/// The last paragraph is always included even if it alone exceeds `max_words`.
+fn truncate_to_last_words(text: &str, max_words: u32) -> String {
+    let paras: Vec<&str> = text
+        .split("\n\n")
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+
+    let mut accumulated: u32 = 0;
+    let mut start_idx = paras.len();
+
+    for (i, para) in paras.iter().enumerate().rev() {
+        let para_words = para.split_whitespace().count() as u32;
+        // Stop accumulating once we'd exceed the limit — but always include at least
+        // the last paragraph (start_idx == paras.len() guard).
+        if accumulated + para_words > max_words && start_idx < paras.len() {
+            break;
+        }
+        accumulated += para_words;
+        start_idx = i;
+    }
+
+    if start_idx == paras.len() {
+        return String::new();
+    }
+    paras[start_idx..].join("\n\n")
 }
 
 pub fn load_chapter(
@@ -210,12 +269,12 @@ pub fn load_chapter(
 }
 
 pub fn extract_ink_instructions(text: &str) -> (String, Vec<Instruction>) {
-    let re = Regex::new(r"(?s)<!--\s*INK:\s*(.*?)\s*-->").expect("Invalid INK regex");
+    let re = ink_re();
     let mut instructions = Vec::new();
 
     for cap in re.captures_iter(text) {
         let full_match = cap.get(0).unwrap();
-        let instruction_text = cap[1].to_string();
+        let instruction_text = cap[1].trim().to_string();
 
         // Anchor = up to 200 chars of text preceding this comment
         let start = full_match.start();
@@ -235,7 +294,8 @@ pub fn extract_ink_instructions(text: &str) -> (String, Vec<Instruction>) {
         });
     }
 
-    // Strip all INK comment tags from the content
+    // Strip only author instruction comments; engine markers (INK:NEW:, INK:REWORKED:)
+    // are preserved so the engine can see what it wrote last session.
     let stripped = re.replace_all(text, "").to_string();
     (stripped, instructions)
 }
@@ -254,7 +314,8 @@ pub fn load_word_count(repo: &Path, target: u32) -> Result<WordCount> {
     let content = std::fs::read_to_string(&path)
         .with_context(|| "Failed to read Full_Book.md")?;
 
-    let total = content.split_whitespace().count() as u32;
+    // Use the same counter as session-close so both modules always agree.
+    let total = crate::maintenance::count_prose_words(&content);
     let remaining = target.saturating_sub(total);
 
     Ok(WordCount { total, target, remaining })
@@ -273,10 +334,10 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
     let kill_requested = kill_path(repo).exists();
     if kill_requested {
         info!("Kill file detected — acknowledging and aborting");
-        // Remove lock if present
-        if lock_path(repo).exists() {
-            remove_stale_lock(repo)?;
-        }
+        // Stage the lock removal via git so it is included in the kill commit and pushed.
+        // --ignore-unmatch avoids a failure when no lock exists.
+        git::run_git(repo, &["rm", "--ignore-unmatch", ".ink-running"])
+            .with_context(|| "Failed to git rm .ink-running on kill")?;
         delete_kill_file(repo)?;
 
         return Ok(SessionPayload {
@@ -291,6 +352,7 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
                 chapter_structure: String::new(),
                 words_per_session: 0,
                 summary_context_entries: 5,
+                words_per_chapter: 3000,
                 current_chapter: 1,
             },
             global_material: vec![],
@@ -300,12 +362,20 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
                 instructions: vec![],
             },
             word_count: WordCount { total: 0, target: 0, remaining: 0 },
+            chapter_close_suggested: false,
+            current_chapter_word_count: 0,
         });
     }
 
-    // 3. Load config
-    info!("Step 3: loading config");
+    // 3. Load config and state
+    info!("Step 3: loading config and state");
     let config = Config::load(repo)?;
+    let state = InkState::load(repo)?;
+
+    // 3b. Compute chapter close suggestion early — needed to decide whether to load
+    //     the next chapter outline (skip it when not near a chapter boundary).
+    let chapter_close_suggested =
+        state.current_chapter_word_count >= (config.words_per_chapter as f64 * 0.9) as u32;
 
     // 4. Collect human edits BEFORE merging with origin so that local
     //    uncommitted changes (IDE saves, INK instructions, etc.) are captured
@@ -358,7 +428,7 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
                 stale_lock_recovered: false,
                 snapshot_tag,
                 human_edits,
-                config: ConfigSnapshot::from(&config),
+                config: ConfigSnapshot::new(&config, state.current_chapter),
                 global_material: vec![],
                 chapters: Chapters { current: None, next: None },
                 current_review: CurrentReview {
@@ -366,6 +436,8 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
                     instructions: vec![],
                 },
                 word_count: WordCount { total: 0, target: config.target_length, remaining: 0 },
+                chapter_close_suggested: false,
+                current_chapter_word_count: state.current_chapter_word_count,
             });
         }
         Some(age) => {
@@ -387,10 +459,19 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
     info!("Step 11: loading global material");
     let global_material = load_global_material(repo, config.summary_context_entries)?;
 
-    // 12 & 13. Load current and next chapters
-    info!("Step 12-13: loading chapters {} and {}", config.current_chapter, config.current_chapter + 1);
-    let current_chapter = load_chapter(repo, config.current_chapter, &human_edits)?;
-    let next_chapter = load_chapter(repo, config.current_chapter + 1, &human_edits)?;
+    // 12. Load current chapter
+    info!("Step 12: loading chapter {}", state.current_chapter);
+    let current_chapter = load_chapter(repo, state.current_chapter, &human_edits)?;
+
+    // 13. Load next chapter only when chapter close is approaching — avoids sending
+    //     the outline tokens every session when not near a chapter boundary.
+    let next_chapter = if chapter_close_suggested {
+        info!("Step 13: chapter close suggested — loading next chapter {}", state.current_chapter + 1);
+        load_chapter(repo, state.current_chapter + 1, &human_edits)?
+    } else {
+        info!("Step 13: chapter close not suggested — skipping next chapter load");
+        None
+    };
 
     // 14. Read current.md + extract INK instructions
     info!("Step 14: loading current review");
@@ -401,7 +482,20 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
     } else {
         String::new()
     };
-    let (stripped_review, instructions) = extract_ink_instructions(&raw_review);
+    let (mut stripped_review, instructions) = extract_ink_instructions(&raw_review);
+
+    // 14b. Optionally truncate the rolling window to limit token usage.
+    //      Only applied when current_review_window_words > 0.
+    if config.current_review_window_words > 0 {
+        let word_count = stripped_review.split_whitespace().count() as u32;
+        if word_count > config.current_review_window_words {
+            info!(
+                "Step 14b: truncating current.md from {} to last {} words",
+                word_count, config.current_review_window_words
+            );
+            stripped_review = truncate_to_last_words(&stripped_review, config.current_review_window_words);
+        }
+    }
 
     // 15. Load word count
     info!("Step 15: loading word count");
@@ -414,7 +508,7 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
         stale_lock_recovered,
         snapshot_tag,
         human_edits,
-        config: ConfigSnapshot::from(&config),
+        config: ConfigSnapshot::new(&config, state.current_chapter),
         global_material,
         chapters: Chapters {
             current: current_chapter,
@@ -425,5 +519,7 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
             instructions,
         },
         word_count,
+        chapter_close_suggested,
+        current_chapter_word_count: state.current_chapter_word_count,
     })
 }

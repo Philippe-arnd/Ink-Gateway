@@ -89,6 +89,11 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
          Use `ink-cli rollback` to undo the last session. -->\n",
         &mut files_created,
     )?;
+    write_file(
+        ".ink-state.yml",
+        "current_chapter: 1\ncurrent_chapter_word_count: 0\n",
+        &mut files_created,
+    )?;
 
     git_commit_and_push(repo_path)?;
 
@@ -205,6 +210,7 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
             "COMPLETE",
             ".ink-running",
             ".ink-kill",
+            ".ink-state.yml",
         ])
         .current_dir(repo_path)
         .status();

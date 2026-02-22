@@ -108,6 +108,12 @@ Description: Mark the book as finished. Writes COMPLETE marker and performs fina
 Shell: ink-cli complete $repo_path
 ```
 
+```
+Tool: advance_chapter
+Description: Advance to the next chapter. Updates .ink-state.yml (increments current_chapter, resets chapter word count to 0) and commits. Does NOT push — session_close handles all pushes. Call this between session_open and session_close when chapter_close_suggested is true.
+Shell: ink-cli advance-chapter $repo_path
+```
+
 The `repo_path` is the local clone of this book repository.
 
 ---
@@ -118,11 +124,12 @@ Follow this sequence exactly, every session:
 
 1. **Open** — Call `session_open` with the repo path.
 2. **Abort checks** — Evaluate the payload fields in this order (see §Abort Rules).
-3. **Analyse** — Read `current_review.content` and `current_review.instructions`. Identify what the author changed and what they are asking for.
-4. **Consistency check** — Cross-reference any planned changes against `Soul.md`, `Outline.md`, `Characters.md`, `Lore.md`, and `chapters.current`. Make sure the planned prose is coherent with the global arc and chapter goals.
-5. **Generate** — Write `config.words_per_session` words of prose as the new `current.md` content (see §current.md Contract).
-6. **Close** — Call `session_close` with the prose on stdin and optional flags.
-7. **Complete (conditional)** — If `completion_ready` is `true` AND you confirm narrative closure, call `complete`.
+3. **Chapter advance (conditional)** — If `chapter_close_suggested: true`, call `advance_chapter` before generating (see §Chapter Advancement).
+4. **Analyse** — Read `current_review.content` and `current_review.instructions`. Identify what the author changed and what they are asking for.
+5. **Consistency check** — Cross-reference any planned changes against `Soul.md`, `Outline.md`, `Characters.md`, `Lore.md`, and `chapters.current`. Make sure the planned prose is coherent with the global arc and chapter goals.
+6. **Generate** — Write `config.words_per_session` words of prose as the new `current.md` content (see §current.md Contract).
+7. **Close** — Call `session_close` with the prose on stdin and optional flags.
+8. **Complete (conditional)** — If `completion_ready` is `true` AND you confirm narrative closure, call `complete`.
 
 ---
 
@@ -141,17 +148,72 @@ Check these in order immediately after `session_open`. Stop before any generatio
 
 ---
 
+## Chapter Advancement
+
+`chapter_close_suggested: true` means the current chapter has reached ≥ 90% of `config.words_per_chapter`. This is a signal, not a hard command — use your narrative judgement to decide whether the chapter has genuinely reached a stopping point.
+
+**If you decide to advance:**
+
+Call `advance_chapter`. It returns one of three responses:
+
+### `status: "advanced"`
+```json
+{
+  "status": "advanced",
+  "new_chapter": 4,
+  "chapter_file": "Chapters material/Chapter_04.md",
+  "chapter_content": "..."
+}
+```
+The chapter has advanced. `chapter_content` contains the outline for the new chapter. Use it as your `chapters.current` for this session — the payload's `chapters` field reflects the old chapter and can be ignored. Proceed with **§Analyse** using the new chapter context.
+
+### `status: "needs_chapter_outline"`
+```json
+{
+  "status": "needs_chapter_outline",
+  "chapter": 4,
+  "chapter_file": "Chapters material/Chapter_04.md"
+}
+```
+The next chapter outline does not exist yet. You must write it before advancing:
+
+1. Using `Outline.md` as your guide, draft a detailed scene-beat outline for chapter `N`.
+2. Write the file to `chapter_file` using the structure: `# Chapter N\n\n## Beats\n\n...\n`
+3. Commit the file:
+   ```bash
+   git -C $repo_path add "Chapters material/Chapter_04.md"
+   git -C $repo_path commit -m "outline: add Chapter 04 beats"
+   ```
+4. Call `advance_chapter` again. It will now return `status: "advanced"`.
+
+### `status: "error"`
+```json
+{
+  "status": "error",
+  "message": "Already at last chapter (30/30)"
+}
+```
+You are at the final chapter. Do not advance. Continue writing the current chapter. If `completion_ready` is also `true`, proceed to the §Completion Discipline check after closing the session.
+
+**If you decide NOT to advance** (narrative is not at a natural chapter boundary):
+Skip the advance and proceed to §Analyse normally. `chapter_close_suggested` is advisory — you can continue writing the current chapter for another session.
+
+---
+
 ## Understanding the Payload
 
 | Field | Meaning |
 |---|---|
-| `config` | Book settings: target length, chapter structure, words per session |
+| `config` | Book settings: target length, chapter structure, words per session, words per chapter |
+| `config.current_chapter` | Chapter currently being written (sourced from `.ink-state.yml`, not `Config.yml`) |
 | `global_material[]` | All files in `Global Material/` — soul, outline, characters, lore, summary |
-| `chapters.current` | Active chapter outline (`config.current_chapter`) |
+| `chapters.current` | Active chapter outline |
 | `chapters.next` | Next chapter outline (look-ahead only) |
-| `current_review.content` | Contents of `Review/current.md` — last session's prose window, your starting point |
-| `current_review.instructions` | `<!-- INK: ... -->` directives extracted from `current.md` |
+| `current_review.content` | Contents of `Review/current.md` with author `<!-- INK: ... -->` comments stripped (engine markers preserved) |
+| `current_review.instructions` | `<!-- INK: ... -->` directives extracted from `current.md`, as `{ anchor, instruction }` objects |
 | `word_count` | `{ total, target, remaining }` computed from `Full_Book.md` (validated prose only) |
+| `chapter_close_suggested` | `true` when `current_chapter_word_count ≥ 90%` of `config.words_per_chapter` — triggers §Chapter Advancement |
+| `current_chapter_word_count` | Words appended to `Full_Book.md` in the current chapter so far |
 | `human_edits` | Files the author modified since the last session |
 | `snapshot_tag` | Git tag created for this session (for your logs) |
 
@@ -247,6 +309,7 @@ echo "$prose" | ink-cli session-close /data/ink-gateway/books/my-book \
   "total_word_count": 43210,
   "target_length": 90000,
   "completion_ready": false,
+  "current_chapter_word_count": 2340,
   "status": "closed"
 }
 ```

@@ -31,12 +31,17 @@ The **agent gateway** is a self-hosted AI agent platform. The `ink-engine` is a 
   Summary.md           ← Append-only delta log; last summary_context_entries
                           paragraphs loaded per session
   Config.yml           ← language, target_length, chapter_count, chapter_structure,
-                          words_per_session, summary_context_entries, current_chapter,
-                          words_per_page (pagination, default 250), session_timeout_minutes
+                          words_per_session, summary_context_entries, words_per_chapter
+                          (chapter close threshold, default 3000), words_per_page
+                          (pagination, default 250), session_timeout_minutes,
+                          current_review_window_words (rolling prose window cap in
+                          session-open payload, default 0 = unlimited)
                           (model is set at the agent gateway level, not here)
 
 /Chapters material/    ← Chapter outlines ONLY (no prose).
                           Only current_chapter and current_chapter+1 are loaded per session.
+.ink-state.yml         ← Engine-managed state: current_chapter (1-indexed), current_chapter_word_count.
+                          Committed to git; never edit manually.
 /Review/
   current.md           ← Rolling prose window. Engine rewrites this every session.
                           Author adds <!-- INK: [instruction] --> comments to direct the engine.
@@ -62,23 +67,25 @@ COMPLETE               ← Written by engine when book is finished (triggers cro
 **Engine output format** for `current.md`:
 - Reworked passages: `<!-- INK:REWORKED:START -->` ... `<!-- INK:REWORKED:END -->`
 - New continuation prose: `<!-- INK:NEW:START -->` ... `<!-- INK:NEW:END -->`
-- These markers live only in `current.md`, never in `Full_Book.md`
+- These markers live only in `current.md`, never in `Full_Book.md` — `session-close` and `complete` strip them automatically before appending validated prose.
 
 **Implicit validation:** if there are no INK instruction comments in `current.md`, the entire file is validated and moved to `Full_Book.md`.
 
 ## Engine Session (the core loop)
 
-1. **Open:** `session-open` → git-setup (pre-flight commit, snapshot tag, draft branch) + read-context (all Global Material, current+next chapter, current.md with INK instructions extracted) → full JSON payload
+1. **Open:** `session-open` → git-setup (pre-flight commit, snapshot tag, draft branch) + read-context (all Global Material, current chapter + next chapter if `chapter_close_suggested`, current.md with INK instructions extracted) → full JSON payload
 2. **Abort check:** If `session_already_run` is `true` (`.ink-running` lock exists) → stop.
 3. **Analyse:** Read `current_review.content` and `current_review.instructions`; identify human edits and INK directives
 4. **Consistency check:** Cross-reference plan against `Soul.md`, `Outline.md`, `Characters.md`, `Lore.md`, and active chapter outline
 5. **Generate:** Write reworked blocks (one per INK instruction) + new continuation prose (`words_per_session` words)
 6. **Close:** `session-close` (prose via stdin) → extract validated section → append to `Full_Book.md` with pagination → overwrite `current.md` → append `Summary.md` → write `Changelog/` → push `main` + `draft`
-7. **Complete (conditional):** If `completion_ready` AND arcs fulfilled → `complete` → write `COMPLETE`, final push, cron deleted
+7. **Complete (loop):** If `completion_ready` AND arcs fulfilled → call `complete`:
+   - If `status: "needs_revision"` → run a normal session (`session-open` → rework blocks only, no new prose → `session-close`) → call `complete` again → repeat until clean
+   - If `status: "complete"` → book sealed: `current.md` replaced with placeholder, `Full_Book.md` finalized, `COMPLETE` written, pushed, cron deleted
 
 **Instruction syntax:** `<!-- INK: [Instruction] -->` (space after colon) in `current.md` — extracted by `session-open` into a typed array.
 
-**Chapter advancement:** Author increments `current_chapter` in `Config.yml` to advance to the next chapter.
+**Chapter advancement:** Automated via `advance-chapter`. When `session-open` returns `chapter_close_suggested: true` (chapter word count ≥ 90% of `words_per_chapter`), the engine calls `advance-chapter`. If the next chapter outline is missing, `advance-chapter` returns `needs_chapter_outline` and the engine writes it first, then retries. On success, `.ink-state.yml` is updated with the new chapter number and a reset word count.
 
 ## Agent Cron Registration (one per book)
 
@@ -97,7 +104,7 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 
 ## Implementation Language & Key Files
 
-- **`ink-cli`** — Rust binary. Six subcommands: `init`, `session-open`, `session-close`, `complete`, `reset`, `rollback`.
+- **`ink-cli`** — Rust binary. Seven subcommands: `init`, `session-open`, `session-close`, `complete`, `advance-chapter`, `reset`, `rollback`.
 - **`Cargo.toml`** — dependency manifest. Version format: `YYYY.M.DD-N`.
 - **`ink-engine` AGENTS.md** (Phase 3) — Writing engine system prompt + inline tool definitions.
 
@@ -108,7 +115,8 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 | `init <repo-path>` | Scaffold dirs + seed files + commit; TTY: 10-question inquire TUI; non-TTY: JSON with `questions` array (each has `question`, `hint`, `target_file`) | JSON: `status`, `files_created`, `questions` |
 | `session-open <repo-path>` | git-setup + read-context → full payload | JSON payload |
 | `session-close <repo-path>` | stdin prose → split current.md → append validated to Full_Book (with pagination) → write new current.md → maintain + push | JSON: word counts + `completion_ready` |
-| `complete <repo-path>` | Write `COMPLETE` + final push | JSON: `{ "status": "complete" }` |
+| `complete <repo-path>` | Check for pending INK instructions in current.md; if found → `needs_revision` JSON; if clean → append current.md to Full_Book.md, write COMPLETE, push | JSON: `{ "status": "needs_revision", "current_review": { "content", "instructions" } }` or `{ "status": "complete", "total_word_count" }` |
+| `advance-chapter <repo-path>` | Advance to next chapter: check next chapter file exists (returns `needs_chapter_outline` if missing), update `.ink-state.yml`, commit. Does NOT push. | JSON: `{ "status": "advanced", "new_chapter", "chapter_file", "chapter_content" }` or `{ "status": "needs_chapter_outline", "chapter", "chapter_file" }` or `{ "status": "error", "message" }` |
 | `reset <repo-path>` | Wipe all book content; user must type repo name to confirm | Console |
 | `rollback <repo-path>` | Hard-reset to most recent ink-* tag + force-push; y/n confirmation | Console |
 
@@ -120,8 +128,9 @@ src/
   init.rs          ← init + reset subcommands; inquire TUI; scaffold + Q&A
   git.rs           ← git operations (pre-flight, snapshot, branch, push)
   context.rs       ← context aggregation, INK instruction extraction, JSON output
-  maintenance.rs   ← session-close (split/pagination/Full_Book), complete, rollback
+  maintenance.rs   ← session-close (split/pagination/Full_Book), complete, advance-chapter, rollback
   config.rs        ← Config.yml parsing (serde_yaml)
+  state.rs         ← .ink-state.yml parsing (current_chapter, current_chapter_word_count)
 templates/         ← seed files embedded via include_str! (Soul, Outline, Characters, Lore, etc.)
 Cargo.toml
 ```
@@ -134,7 +143,7 @@ Cargo.toml
 | `serde` + `serde_yaml` | Parse `Config.yml` |
 | `serde_json` | Structured JSON output for all subcommands |
 | `chrono` | Date-stamped tags, filenames, changelog entries |
-| `walkdir` | Directory traversal for `Global Material/` |
+| `std::fs::read_dir` | Directory traversal for `Global Material/` (stdlib, no extra dep) |
 | `regex` | Extract `<!-- INK: ... -->` instruction comments |
 | `anyhow` | Ergonomic error propagation |
 | `inquire` | Interactive TTY prompts for `init` and `reset`/`rollback` confirmations |
