@@ -23,11 +23,15 @@ A collaborative AI-driven writing framework hosted on a private VPS. It enables 
   Summary.md           ← Append-only delta log; last summary_context_entries
                           paragraphs loaded into context per session
   Config.yml           ← target_length, chapter_count, chapter_structure,
-                          words_per_session, summary_context_entries, current_chapter
+                          words_per_session, summary_context_entries, words_per_chapter,
+                          words_per_page, current_review_window_words, session_timeout_minutes
 
 /Chapters material/    ← Chapter outlines ONLY (no prose).
-                          Only current_chapter and current_chapter+1 are loaded per session.
+                          Only current chapter loaded per session; next chapter loaded
+                          when chapter_close_suggested is true.
                           Human edits trigger AI re-evaluation of that chapter.
+.ink-state.yml         ← Engine-managed state: current_chapter, current_chapter_word_count.
+                          Committed to git; never edit manually.
 /Review/
   current.md           ← Rolling context window (words_per_session words).
                           Overwritten each session with new output.
@@ -53,7 +57,7 @@ COMPLETE               ← Written by engine when book is finished (triggers cro
 
 **Instruction syntax:** Insert `<!-- INK: [Instruction] -->` anywhere in `current.md`. `session-open` extracts these into a typed array — the agent never scans raw markdown.
 
-**Chapter advancement:** The author increments `current_chapter` in `Config.yml` (via the editor) to signal chapter completion. This is the only manual configuration step during a book's lifetime.
+**Chapter advancement:** Automated via `advance-chapter`. When `session-open` returns `chapter_close_suggested: true` (chapter word count ≥ 90% of `words_per_chapter`), the engine calls `advance-chapter`. The subcommand updates `.ink-state.yml` and commits. No manual action needed.
 
 ### 4.2 Completion & Buffer Logic
 - **Buffer:** ±10% of `target_length` in word count.
@@ -62,7 +66,7 @@ COMPLETE               ← Written by engine when book is finished (triggers cro
 ## 5. Multi-Book Management
 - Each book has its own GitHub repository and one cron job in the agent gateway.
 - Book registration = cron job creation. No central registry needed.
-- `current_chapter` is the only per-session manual setting.
+- Chapter advancement is fully automated — no per-session manual settings.
 
 ## 6. Security & Reliability
 - **Git Snapshots:** Mandatory `ink-YYYY-MM-DD-HH-MM` tags before every session. Supports multiple sessions per day.

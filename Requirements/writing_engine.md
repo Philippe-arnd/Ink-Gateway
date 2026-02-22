@@ -7,7 +7,7 @@ This document serves as the technical mandate for the `ink-engine` agent running
 - **Clone location:** `/data/ink-gateway/books/<book-name>/`
 - **Git auth:** The agent gateway's configured GitHub token handles all push/pull.
 - **File I/O:** The agent never writes files directly. All operations go through `ink-cli` subcommands.
-- **Tools:** Two shell tools — `session_open` and `session_close` — defined inline in `AGENTS.md`.
+- **Tools:** Four shell tools — `session_open`, `session_close`, `complete`, `advance_chapter` — defined inline in `AGENTS.md`.
 
 ---
 
@@ -19,14 +19,18 @@ The agent calls `ink-cli session-open <repo-path>`, which performs git-setup and
 
 | Field | Source | Notes |
 |---|---|---|
-| `config` | `Global Material/Config.yml` | All settings including `current_chapter` |
-| `session_already_run` | Lock file existence | `true` if `.ink-running` exists in repo root (concurrent or crashed session) |
-| `global_material[]` | All files in `Global Material/` | `Summary.md` truncated to last `summary_context_entries` paragraphs |
-| `chapters.current` | `Chapters material/Chapter_<N>.md` | Only the active chapter (`current_chapter` from config) |
-| `chapters.next` | `Chapters material/Chapter_<N+1>.md` | Look-ahead for narrative planning |
-| `current.content` | `Review/current.md` | Previous session's prose — the rolling context window |
-| `current.instructions` | Extracted from `current.md` | `<!-- INK: ... -->` comments as a typed array |
-| `word_count` | `Full_Book.md` word count | `{ total, target, remaining }` |
+| `config` | `Global Material/Config.yml` | All settings; `current_chapter` sourced from `.ink-state.yml` |
+| `kill_requested` | `.ink-kill` file existence | `true` → abort immediately, no generation |
+| `session_already_run` | Lock file existence | `true` if `.ink-running` is current → abort |
+| `stale_lock_recovered` | Lock file age | `true` if stale lock auto-removed → proceed normally |
+| `chapter_close_suggested` | `.ink-state.yml` vs `words_per_chapter` | `true` when chapter word count ≥ 90% of target → engine may call `advance_chapter` |
+| `current_chapter_word_count` | `.ink-state.yml` | Words written to `Full_Book.md` in current chapter so far |
+| `global_material[]` | All files in `Global Material/` | `Summary.md` truncated to last `summary_context_entries` substantive paragraphs |
+| `chapters.current` | `Chapters material/Chapter_<N>.md` | Active chapter outline |
+| `chapters.next` | `Chapters material/Chapter_<N+1>.md` | Only populated when `chapter_close_suggested` is `true` |
+| `current_review.content` | `Review/current.md` | Author instructions stripped; engine markers preserved |
+| `current_review.instructions` | Extracted from `current.md` | `<!-- INK: ... -->` comments as typed `{ anchor, instruction }` array |
+| `word_count` | `Full_Book.md` word count | `{ total, target, remaining }` (prose only, comment lines excluded) |
 | `human_edits` | Git timestamp check | Files modified today, committed to `main` |
 
 **`Global Material/` contains:**
@@ -58,11 +62,11 @@ Read `human_edits` from the payload. Adapt the session plan:
 - `Outline.md` changed → re-read the updated plot arc before generating.
 
 ### 3.3 Instruction Processing
-Read `current.instructions` from the payload. For each entry:
-- Locate the `anchor` passage in `current.content`.
+Read `current_review.instructions` from the payload. For each entry:
+- Locate the `anchor` passage in `current_review.content`.
 - Apply the `instruction` as a targeted rewrite of that specific passage.
-- Comments are already stripped from `current.content` — no cleanup needed.
-- Incorporate rewritten passages into the final prose output.
+- Author instructions are already stripped from `current_review.content` — no cleanup needed.
+- Wrap each rewrite in `<!-- INK:REWORKED:START -->` ... `<!-- INK:REWORKED:END -->` blocks.
 
 ### 3.4 Narrative Generation
 - Anchor to the continuation point in `current.content` and last `Summary.md` entry.
@@ -95,6 +99,7 @@ Returns JSON:
   "session_word_count": 1487,
   "total_word_count": 43210,
   "target_length": 90000,
+  "current_chapter_word_count": 2341,
   "completion_ready": false,
   "status": "closed"
 }

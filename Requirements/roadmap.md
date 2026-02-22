@@ -88,6 +88,3 @@
         - Call `complete` at most once, only when `completion_ready` is `true` and narrative closure is confirmed. When in doubt, skip — the cron job runs again.
         - After a successful `complete` response: notify the user, signal cron deletion, stop. No further tool calls.
 
-## Phase 4: Ecosystem
-- [ ] **Static Site Generator:** Hook into `git push` to rebuild a public book listing site.
-- [ ] **Validation Layer:** Automated consistency check across chapters (character names, timeline, facts).

@@ -152,8 +152,7 @@ Cargo.toml
 ## Implementation Roadmap Summary
 
 - **Phase 1:** ✅ Editor git sync, agent registration, `session-open` subcommand
-- **Phase 2:** ✅ `session-close` + `complete` + `init` + `reset` + `rollback`, interactive TUI, current.md/Full_Book split, pagination, extrapolation in init
-- **Phase 3:** `ink-engine` AGENTS.md with inline tool definitions
-- **Phase 4:** Static site, validation layer
+- **Phase 2:** ✅ `session-close` + `complete` + `init` + `reset` + `rollback` + `advance-chapter`, interactive TUI, current.md/Full_Book split, pagination, chapter automation
+- **Phase 3:** ✅ `ink-engine` AGENTS.md — full session flow, chapter advancement, completion discipline, rework loop
 
 See `Requirements/roadmap.md` for detailed task checklists.

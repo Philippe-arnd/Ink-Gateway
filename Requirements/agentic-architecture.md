@@ -19,20 +19,26 @@ The binary is the only component that touches the filesystem and Git. The agent 
 
 **Binary:** `ink-cli`
 
-| Subcommand | Phase | Responsibility | Output |
-|---|---|---|---|
-| `session-open <repo-path>` | Start | git-setup + read-context in one shot | Full JSON payload (see schema) |
-| `session-close <repo-path>` | End | Reads prose from **stdin** → writes `current.md`, updates `Summary.md`, writes `Changelog/` entry, appends to `Full_Book.md`, pushes | JSON: word counts + `completion_ready` |
-| `complete <repo-path>` | Finish | Writes `COMPLETE` marker, final git push | JSON: `{ "status": "complete", "total_word_count": N }` |
+| Subcommand | Responsibility | Output |
+|---|---|---|
+| `init <repo-path>` | Scaffold dirs + seed files; TTY: 10-question TUI; non-TTY: JSON questions array | JSON: `status`, `files_created`, `questions` |
+| `session-open <repo-path>` | git-setup + read-context in one shot | Full JSON payload (see schema) |
+| `session-close <repo-path>` | stdin prose → split current.md → append validated to Full_Book (with pagination) → push | JSON: word counts + `completion_ready` + `current_chapter_word_count` |
+| `complete <repo-path>` | Check for pending INK instructions; seal book if clean | JSON: `{ "status": "complete" \| "needs_revision", ... }` |
+| `advance-chapter <repo-path>` | Check next chapter outline, update `.ink-state.yml`, commit (no push) | JSON: `{ "status": "advanced" \| "needs_chapter_outline" \| "error", ... }` |
+| `reset <repo-path>` | Wipe all book content (confirmation required) | Console |
+| `rollback <repo-path>` | Hard-reset to last ink-* tag + force-push (confirmation required) | Console |
 
 **Source layout:**
 ```
 src/
   main.rs          ← clap router + top-level error handling
+  init.rs          ← init + reset subcommands; inquire TUI; scaffold + Q&A
   git.rs           ← git operations (pre-flight, snapshot, branch, push)
   context.rs       ← context aggregation, INK instruction extraction, JSON output
-  maintenance.rs   ← summary / changelog / Full_Book compiler
+  maintenance.rs   ← session-close (split/pagination/Full_Book), complete, advance-chapter, rollback
   config.rs        ← Config.yml parsing (serde_yaml)
+  state.rs         ← .ink-state.yml parsing (current_chapter, current_chapter_word_count)
 ```
 
 ### `session-open` JSON Schema
@@ -46,11 +52,15 @@ src/
     "words_per_session": 1500,
     "summary_context_entries": 5,
     "current_chapter": 3,
+    "words_per_chapter": 3000,
+    "words_per_page": 250,
     "session_timeout_minutes": 60
   },
   "kill_requested": false,
   "session_already_run": false,
   "stale_lock_recovered": false,
+  "chapter_close_suggested": false,
+  "current_chapter_word_count": 1820,
   "global_material": [
     { "filename": "Outline.md",    "content": "..." },
     { "filename": "Summary.md",    "content": "... last summary_context_entries paragraphs only ..." },
@@ -60,10 +70,10 @@ src/
   ],
   "chapters": {
     "current": { "path": "Chapters material/Chapter_03.md", "content": "...", "modified_today": false },
-    "next":    { "path": "Chapters material/Chapter_04.md", "content": "...", "modified_today": false }
+    "next":    null
   },
-  "current": {
-    "content": "... previous session prose ...",
+  "current_review": {
+    "content": "... previous session prose (engine markers preserved, author instructions stripped) ...",
     "instructions": [
       { "anchor": "surrounding passage text", "instruction": "rewrite in third person" }
     ]
@@ -73,21 +83,26 @@ src/
     "target": 90000,
     "remaining": 46790
   },
-  "human_edits": ["Chapters material/Chapter_03.md"]
+  "human_edits": ["Chapters material/Chapter_03.md"],
+  "snapshot_tag": "ink-2026-02-22-14-30"
 }
 ```
 
-> **`kill_requested`** — `true` when `.ink-kill` exists in the repo root. The user creates this file via the editor to cancel the next scheduled session. `session-open` deletes `.ink-kill` and any stale lock, then returns immediately with `kill_requested: true` and no other context fields populated. The agent MUST abort without calling any further tools.
+> **`config.current_chapter`** — sourced from `.ink-state.yml`, not `Config.yml`.
 >
-> **`session_already_run`** — `true` when a `.ink-running` lock file exists AND its timestamp is within `session_timeout_minutes`. Indicates a concurrent session is in progress. The agent MUST abort when this is `true`. The lock file content is an ISO 8601 start timestamp written by `session-open`.
+> **`chapter_close_suggested`** — `true` when `current_chapter_word_count ≥ 90%` of `config.words_per_chapter`. Engine decides whether to call `advance-chapter`.
 >
-> **`stale_lock_recovered`** — `true` when a `.ink-running` lock was found but its timestamp exceeded `session_timeout_minutes`. The lock was auto-removed and the session proceeds normally. The agent should log this for the operator (indicates a previous session was killed or crashed without cleanup).
+> **`chapters.next`** — only populated when `chapter_close_suggested` is `true`. `null` otherwise.
 >
-> **`chapters`** — only `current_chapter` and `current_chapter + 1` are loaded. The full chapter list is not sent to the model. The author increments `current_chapter` in `Config.yml` to signal chapter completion.
+> **`current_review`** — replaces the old `current` field. `content` has author `<!-- INK: -->` instructions stripped but engine markers preserved. `instructions` is the typed array of extracted directives.
 >
-> **`instructions`** — `<!-- INK: [text] -->` comments extracted from `current.md` as a typed array. The agent never scans raw markdown.
+> **`kill_requested`** — `true` when `.ink-kill` exists. `session-open` deletes it and returns immediately with no other context fields populated.
 >
-> **`Summary.md`** — only the last `summary_context_entries` paragraphs are included. The full file is preserved on disk.
+> **`session_already_run`** — `true` when `.ink-running` exists and its timestamp is within `session_timeout_minutes`.
+>
+> **`stale_lock_recovered`** — `true` when a stale lock was auto-removed. Session proceeds normally.
+>
+> **`Summary.md`** — only the last `summary_context_entries` substantive paragraphs are included. Short auto-generated one-liners are filtered out.
 
 ### Binary Guardrails
 
@@ -107,6 +122,7 @@ These fire regardless of agent behavior. Agent-level rules (see `writing_engine.
   "session_word_count": 1487,
   "total_word_count": 43210,
   "target_length": 90000,
+  "current_chapter_word_count": 2341,
   "completion_ready": false,
   "status": "closed"
 }
@@ -120,18 +136,22 @@ The "Writer". Knows how to write and when to call its tools — never touches fi
 
 ### Tool Definitions (in AGENTS.md)
 
-Two shell tools, defined inline — no separate skill file needed:
+Four shell tools, defined inline — no separate skill file needed:
 
 ```
 Tool: session_open
 Shell: ink-cli session-open $repo_path
 
 Tool: session_close
-Shell: ink-cli session-close $repo_path
+Shell: ink-cli session-close $repo_path [--summary "..."] [--human-edit "..."]
 Stdin: generated prose
-```
 
-The `complete` subcommand is rarely invoked; it can be defined as a third tool or called directly in the agent's system prompt instructions for the end-of-book case.
+Tool: complete
+Shell: ink-cli complete $repo_path
+
+Tool: advance_chapter
+Shell: ink-cli advance-chapter $repo_path
+```
 
 ### Per-Book Identity
 

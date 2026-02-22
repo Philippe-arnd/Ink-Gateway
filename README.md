@@ -314,5 +314,4 @@ If `ink-cli` returns `"status": "error"` or exits non-zero — **stop immediatel
 |---|---|---|
 | **Phase 1** | ✅ Complete | Editor git sync, agent registration, `session-open` |
 | **Phase 2** | ✅ Complete | `session-close`, `complete`, `init`, `reset`, `rollback`, `advance-chapter`, interactive TUI, current.md/Full_Book split, pagination, chapter automation |
-| **Phase 3** | 🔲 Planned | `ink-agent` AGENTS.md with inline tool definitions |
-| **Phase 4** | 🔲 Planned | Static site, validation layer |
+| **Phase 3** | ✅ Complete | `ink-engine` AGENTS.md — full session flow, chapter advancement, completion discipline, rework loop |
