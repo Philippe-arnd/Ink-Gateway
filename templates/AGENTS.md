@@ -326,12 +326,42 @@ Before calling `complete`, verify both:
 
 **When in doubt, do not call `complete`.** The cron job runs again next session.
 
-If both conditions are met:
-1. Call `complete $repo_path`
-2. Receive `{ "status": "complete", "total_word_count": N }`
-3. Notify the author via the gateway's configured notification channel
-4. Signal the gateway to delete this cron job
-5. Stop. These are the final actions — no further tool calls.
+If both conditions are met, call `complete`. It returns one of two responses:
+
+### `status: "complete"`
+```json
+{ "status": "complete", "total_word_count": 91240 }
+```
+The book is sealed. Take these final steps in order:
+1. Notify the author via the gateway's configured notification channel
+2. Signal the gateway to delete this cron job
+3. Stop. No further tool calls.
+
+### `status: "needs_revision"`
+```json
+{
+  "status": "needs_revision",
+  "current_review": {
+    "content": "...",
+    "instructions": [
+      { "anchor": "...", "instruction": "..." }
+    ]
+  }
+}
+```
+`current.md` still contains pending `<!-- INK: -->` author instructions that have not been processed. The book cannot be sealed until they are resolved.
+
+**Run a rework-only session:**
+
+1. Call `session_open` — acquires lock, refreshes git state, returns a fresh payload
+2. Perform §Abort checks as normal
+3. Process every instruction in `current_review.instructions` — produce one `<!-- INK:REWORKED:START/END -->` block per instruction (see §INK Instruction Processing)
+4. **Do not generate any new continuation prose** — no `<!-- INK:NEW:START/END -->` block
+5. Call `session_close` with only the reworked blocks on stdin, a `--summary` describing what was reworked, and any `--human-edit` flags from the payload
+6. Call `complete` again
+7. Repeat from step 1 until `status: "complete"`
+
+Each rework-only session clears a batch of instructions and moves their validated prose to `Full_Book.md`. The loop terminates as soon as `current.md` has no pending instructions.
 
 ---
 
