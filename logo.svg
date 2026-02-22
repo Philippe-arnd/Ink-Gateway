@@ -1,26 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 150" width="400" height="600">
   <rect width="100" height="150" rx="35" ry="35" fill="white"/>
-  <g fill="none" stroke="#1C2C3E" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Body (Keep wide silhouette) -->
+  <!-- Centered Robot Group: translate Y further to -8 for better visual centering -->
+  <g transform="translate(0, -8)" fill="none" stroke="#1C2C3E" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Body -->
     <path d="M 15 65 C 10 90, 20 120, 50 145 C 80 120, 90 90, 85 65 C 80 45, 20 45, 15 65 Z" />
     
-    <!-- Antennae / Feathers (Reduced size and width) -->
+    <!-- Antennae / Feathers -->
     <path d="M 50 48 L 50 40" /> 
     <path d="M 50 40 Q 40 38, 32 32" /> 
     <path d="M 50 40 Q 60 38, 68 32" /> 
     <circle cx="32" cy="32" r="2.5" fill="#1C2C3E" />
     <circle cx="68" cy="32" r="2.5" fill="#1C2C3E" />
 
-    <!-- Eyes (Reduced size, moved slightly up) -->
+    <!-- Eyes -->
     <circle cx="35" cy="74" r="7" stroke-width="2.2" />
     <circle cx="65" cy="74" r="7" stroke-width="2.2" />
     <circle cx="37" cy="73" r="2.2" fill="#1C2C3E" stroke="none" />
     <circle cx="67" cy="73" r="2.2" fill="#1C2C3E" stroke="none" />
 
-    <!-- Mouth (Reduced and moved up) -->
+    <!-- Mouth -->
     <path d="M 44 90 Q 50 94, 56 90" stroke-width="2.2" />
 
-    <!-- Pen tip area (Moved UP) -->
+    <!-- Pen tip area -->
     <circle cx="50" cy="110" r="4" /> 
     <line x1="50" y1="145" x2="50" y2="114" />
   </g>
