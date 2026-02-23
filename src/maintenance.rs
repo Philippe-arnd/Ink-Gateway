@@ -207,10 +207,15 @@ pub fn close_session(
         String::new()
     };
 
-    // Everything before the first author INK instruction is validated prose
-    let validated = match find_first_ink_instruction(&old_current) {
-        Some(pos) => old_current[..pos].trim_end().to_string(),
-        None => old_current.trim_end().to_string(), // no instructions → all is validated
+    // Everything before the first author INK instruction is validated prose.
+    // The pending section (from the first instruction onwards) is tracked separately:
+    // if the engine skips rework, we carry it forward so instructions aren't silently lost.
+    let (validated, pending_opt) = match find_first_ink_instruction(&old_current) {
+        Some(pos) => (
+            old_current[..pos].trim_end().to_string(),
+            Some(old_current[pos..].trim_start().to_string()),
+        ),
+        None => (old_current.trim_end().to_string(), None), // no instructions → all is validated
     };
 
     // ── Step 2: Append validated content to Full_Book.md ────────────────────
@@ -246,10 +251,32 @@ pub fn close_session(
     state.save(repo)?;
 
     // ── Step 3: Write new current.md = engine prose (REWORKED + NEW blocks) ──
+    //
+    // Guard: if old current.md had pending INK instructions but the engine
+    // produced no REWORKED blocks, the rework was silently skipped.
+    // Carry the pending section forward so instructions surface again in the
+    // next session-open payload instead of being permanently discarded.
+    let new_current = match pending_opt {
+        Some(ref pending) if !prose.contains("<!-- INK:REWORKED:START -->") => {
+            let instruction_count = ink_re().find_iter(pending).count();
+            tracing::warn!(
+                "Engine produced 0 REWORKED blocks despite {} pending INK instruction(s); \
+                 carrying pending section forward to next session",
+                instruction_count
+            );
+            // Strip stale engine markers from pending before re-appending so they
+            // don't accumulate across sessions (markers belong only in current.md
+            // when freshly generated, not when preserved from a prior session).
+            let pending_clean = strip_engine_markers(pending);
+            format!("{}\n\n{}", prose.trim_end(), pending_clean.trim())
+        }
+        _ => prose.to_string(),
+    };
+
     info!("Writing new Review/current.md");
     std::fs::create_dir_all(&review_dir)
         .with_context(|| "Failed to create Review/")?;
-    std::fs::write(&current_md_path, prose)
+    std::fs::write(&current_md_path, &new_current)
         .with_context(|| "Failed to write Review/current.md")?;
 
     // ── Step 4: Append to Summary.md ─────────────────────────────────────────

@@ -6,6 +6,86 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+// ─── Seed content ─────────────────────────────────────────────────────────────
+
+/// Written to CLAUDE.md and GEMINI.md by `ink-cli seed`.
+/// Self-contained: guides any AI agent from an empty repo through init without
+/// requiring AGENTS.md to already exist.
+const SEED_CONTENT: &str = "\
+# Ink Gateway — Book Repository
+
+You are the **ink-engine** fiction writing agent. Your sole interface to this repository is `ink-cli`.
+
+---
+
+## Step 1 — Verify ink-cli
+
+```bash
+ink-cli --version
+```
+
+If not found, install it:
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/install.sh | sh
+```
+
+---
+
+## Step 2 — Detect repository state
+
+Check whether `Global Material/Config.yml` exists.
+
+| State | Action |
+|---|---|
+| **Absent** | Repository not initialized — follow §Initialize below |
+| **Present** | Repository is ready — follow `AGENTS.md` for writing sessions |
+
+---
+
+## Initialize
+
+```bash
+ink-cli init <repo-path> --title \"<Book Title>\" --author \"<Author Name>\" --agent
+```
+
+Derive `--title` from the repository directory name (hyphens/underscores → spaces, title case).
+Derive `--author` from the GitHub URL, repository metadata, or ask the user if unknown.
+
+The command outputs JSON with a `questions` array. Each entry has `question`, `hint`, and `target_file`.
+
+**Ask the author each question in order.** Once you have all 10 answers, extrapolate each brief answer into rich, detailed content, then write the files directly:
+
+| File | What to write |
+|---|---|
+| `Global Material/Config.yml` | Update only the `language:` field. Do not overwrite other fields. |
+| `Global Material/Soul.md` | Full style guide (2–4 paragraphs): narrator voice, sentence rhythm, vocabulary level, emotional register, what to avoid. |
+| `Global Material/Characters.md` | Full character sheet per character: appearance hints, personality, motivation, internal conflict, key relationships, arc across the book. |
+| `Global Material/Outline.md` | Structured plot outline: opening act, rising tension, midpoint reversal, dark night of the soul, climax, resolution, central stakes, thematic undercurrent. |
+| `Global Material/Lore.md` | World-building reference: setting atmosphere, history, social structures, world rules, sensory details the prose should reflect. |
+| `Chapters material/Chapter_01.md` | Detailed scene beats for Chapter 1: what happens, in what order, what the reader should feel, what is established, what is withheld. |
+
+Use this markdown structure:
+
+```
+Soul.md          →  # Soul\\n\\n## Genre & Tone\\n\\n...\\n\\n## Narrator & Perspective\\n\\n...\\n
+Characters.md    →  # Characters\\n\\n## Protagonist\\n\\n...\\n\\n## Antagonist / Obstacle\\n\\n...\\n
+Outline.md       →  # Outline\\n\\n## Opening\\n\\n...\\n\\n## Midpoint\\n\\n...\\n\\n## Ending\\n\\n...\\n
+Lore.md          →  # Lore\\n\\n## Setting\\n\\n...\\n
+Chapter_01.md    →  # Chapter 1\\n\\n## Beats\\n\\n...\\n
+```
+
+Then commit and push:
+
+```bash
+git -C <repo-path> add -A
+git -C <repo-path> commit -m \"init: populate global material from author Q&A\"
+git -C <repo-path> push origin main
+```
+
+Stop. Notify the author the book is ready — they can review `Global Material/` in their editor and start the first writing session when satisfied.
+";
+
 const CONFIG_YML: &str = include_str!("../templates/Config.yml");
 const SOUL_MD: &str = include_str!("../templates/Soul.md");
 const OUTLINE_MD: &str = include_str!("../templates/Outline.md");
@@ -162,6 +242,55 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
         author: author.to_string(),
         files_created,
         questions,
+    })
+}
+
+// ─── seed ─────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct SeedPayload {
+    pub status: &'static str,
+    pub files_created: Vec<String>,
+}
+
+/// Write CLAUDE.md and GEMINI.md into `repo_path` so that any AI agent launched
+/// in an empty repo knows to run `ink-cli init --agent` before the first session.
+/// Idempotent: safe to re-run; overwrites existing files.
+pub fn run_seed(repo_path: &Path) -> Result<SeedPayload> {
+    let mut files_created: Vec<String> = Vec::new();
+
+    for name in &["CLAUDE.md", "GEMINI.md"] {
+        let path = repo_path.join(name);
+        fs::write(&path, SEED_CONTENT)
+            .with_context(|| format!("Failed to write {}", name))?;
+        files_created.push(name.to_string());
+    }
+
+    let run = |args: &[&str]| -> Result<()> {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo_path)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("git {} failed", args.join(" "));
+        }
+        Ok(())
+    };
+
+    run(&["add", "CLAUDE.md", "GEMINI.md"])?;
+    run(&["commit", "-m", "chore: add agent bootstrap files (CLAUDE.md, GEMINI.md)"])?;
+
+    let push = Command::new("git")
+        .args(["push", "origin", "main"])
+        .current_dir(repo_path)
+        .status()?;
+    if !push.success() {
+        tracing::warn!("git push skipped — no remote configured");
+    }
+
+    Ok(SeedPayload {
+        status: "seeded",
+        files_created,
     })
 }
 

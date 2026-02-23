@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Parser)]
-#[command(name = "ink-cli", about = "Ink Gateway CLI for AI-driven fiction writing sessions")]
+#[command(name = "ink-cli", version, about = "Ink Gateway CLI for AI-driven fiction writing sessions")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -61,10 +61,19 @@ enum Commands {
         /// Author name substituted into all template files
         #[arg(long, default_value = "Unknown")]
         author: String,
+        /// Output JSON questions payload instead of running interactive prompts
+        /// (forced automatically when stdout is not a TTY)
+        #[arg(long)]
+        agent: bool,
     },
     /// Advance to the next chapter, resetting the chapter word count
     AdvanceChapter {
         /// Path to the book repository
+        repo_path: PathBuf,
+    },
+    /// Write CLAUDE.md and GEMINI.md so any AI agent can auto-detect and init an empty repo
+    Seed {
+        /// Path to the book repository (must be an existing git repo)
         repo_path: PathBuf,
     },
 }
@@ -106,18 +115,23 @@ fn main() -> Result<()> {
         Commands::Rollback { repo_path } => {
             maintenance::rollback_session(&repo_path)?;
         }
-        Commands::Init { repo_path, title, author } => {
+        Commands::Init { repo_path, title, author, agent } => {
             let result = init::run_init(&repo_path, &title, &author)?;
-            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-                // Human at a terminal: run interactive Q&A
+            let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+            if is_tty && !agent {
+                // Human at a terminal without --agent: run interactive Q&A
                 init::run_interactive_qa(&repo_path, &result)?;
             } else {
-                // Called by agent or piped: output JSON payload as before
+                // Called by agent, piped, or with --agent flag: output JSON payload
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
         }
         Commands::AdvanceChapter { repo_path } => {
             let result = maintenance::advance_chapter(&repo_path)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Commands::Seed { repo_path } => {
+            let result = init::run_seed(&repo_path)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }

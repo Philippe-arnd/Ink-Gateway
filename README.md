@@ -94,13 +94,33 @@ curl -sSfL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/inst
 
 | Command | Description |
 |---|---|
-| `ink-cli init <repo>` | 📖 Scaffold a new book — interactive Q&A in TTY, JSON payload for agents |
+| `ink-cli seed <repo>` | 🌱 Bootstrap for AI agents — write `CLAUDE.md` + `GEMINI.md` so any AI CLI auto-detects and runs `init` |
+| `ink-cli init <repo>` | 📖 Scaffold a new book — interactive Q&A in TTY, JSON payload for agents (`--agent` forces JSON in TTY) |
 | `ink-cli session-open <repo>` | 🔓 Start a writing session — sync, detect edits, load context |
 | `ink-cli session-close <repo>` | 🔒 End a writing session — split current.md, update Full_Book, push |
 | `ink-cli complete <repo>` | 🏁 Mark book as finished — write `COMPLETE` marker, final push |
 | `ink-cli advance-chapter <repo>` | 📑 Advance to next chapter — update `.ink-state.yml`, commit (no push) |
 | `ink-cli reset <repo>` | 🗑️ Wipe all content — allows re-running `init` (confirmation required) |
 | `ink-cli rollback <repo>` | ⏪ Revert to before the last session — force-push (confirmation required) |
+
+---
+
+### 🌱 `seed` — Bootstrap agent files
+
+```bash
+ink-cli seed <repo-path>
+```
+
+Run once on an empty repo **before** launching any AI agent. Creates `CLAUDE.md` and `GEMINI.md` at the repo root with self-contained instructions that guide any AI CLI (Claude Code, Gemini CLI, etc.) through the full initialization flow — no manual steps beyond this command.
+
+```bash
+# Typical flow
+git clone https://github.com/<user>/<book-repo> /path/to/book
+ink-cli seed /path/to/book    # ← one command, then launch any AI CLI
+claude                         # agent reads CLAUDE.md, runs init --agent, asks questions, extrapolates, commits
+```
+
+`seed` is idempotent — safe to re-run to refresh the bootstrap files. It does **not** initialize the book; that is left to the agent after you answer the 10 questions interactively in the AI chat.
 
 ---
 
@@ -115,6 +135,7 @@ Run once per book in an existing git repository. Creates all directories, seed f
 | Mode | Behaviour |
 |---|---|
 | **TTY** (human at terminal) | 10 inline questions grouped by section (Language / Voice / Characters / Plot / World / Chapter 1). Shows a review summary, asks confirmation, commits and pushes — book ready in one shot. |
+| **TTY + `--agent`** | Same as non-TTY: outputs JSON payload without launching prompts. Use this to hand the questions off to an AI model in your IDE. |
 | **Non-TTY** (agent / pipe) | Outputs JSON with `status`, `files_created`, and a `questions` array (each with `question`, `hint`, `target_file`). The agent presents questions, **extrapolates** answers into rich Global Material, writes files, commits. |
 
 ---
@@ -206,7 +227,14 @@ Finds the most recent `ink-*` snapshot tag (created at `session-open` time), har
 git clone https://github.com/<github-username>/<book-repo> /path/to/book
 ```
 
-**2. Scaffold and configure:**
+**2a. If you want an AI agent to handle the setup** (recommended — richer Global Material):
+
+```bash
+ink-cli seed /path/to/book   # creates CLAUDE.md + GEMINI.md, commits, pushes
+claude                        # or: gemini  — agent reads the file, runs init, asks you the 10 questions
+```
+
+**2b. If you prefer to answer the questions yourself at the terminal:**
 
 ```bash
 ink-cli init /path/to/book --title "My Book" --author "Jane Doe"

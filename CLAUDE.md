@@ -104,7 +104,7 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 
 ## Implementation Language & Key Files
 
-- **`ink-cli`** — Rust binary. Seven subcommands: `init`, `session-open`, `session-close`, `complete`, `advance-chapter`, `reset`, `rollback`.
+- **`ink-cli`** — Rust binary. Eight subcommands: `seed`, `init`, `session-open`, `session-close`, `complete`, `advance-chapter`, `reset`, `rollback`.
 - **`Cargo.toml`** — dependency manifest. Version format: `YYYY.M.DD-N`.
 - **`ink-engine` AGENTS.md** (Phase 3) — Writing engine system prompt + inline tool definitions.
 
@@ -112,9 +112,10 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 
 | Subcommand | Responsibility | Output |
 |---|---|---|
-| `init <repo-path>` | Scaffold dirs + seed files + commit; TTY: 10-question inquire TUI; non-TTY: JSON with `questions` array (each has `question`, `hint`, `target_file`) | JSON: `status`, `files_created`, `questions` |
+| `seed <repo-path>` | Write `CLAUDE.md` + `GEMINI.md` to bootstrap agent-driven init on an empty repo; commit + push. Idempotent. | JSON: `status`, `files_created` |
+| `init <repo-path>` | Scaffold dirs + seed files + commit; TTY: 10-question inquire TUI; TTY + `--agent` or non-TTY: JSON with `questions` array (each has `question`, `hint`, `target_file`) | JSON: `status`, `files_created`, `questions` |
 | `session-open <repo-path>` | git-setup + read-context → full payload | JSON payload |
-| `session-close <repo-path>` | stdin prose → split current.md → append validated to Full_Book (with pagination) → write new current.md → maintain + push | JSON: word counts + `completion_ready` |
+| `session-close <repo-path>` | stdin prose → split current.md → append validated to Full_Book (with pagination) → write new current.md → maintain + push. If engine produced no REWORKED blocks despite pending INK instructions, carries the pending section forward to next session. | JSON: word counts + `completion_ready` |
 | `complete <repo-path>` | Check for pending INK instructions in current.md; if found → `needs_revision` JSON; if clean → append current.md to Full_Book.md, write COMPLETE, push | JSON: `{ "status": "needs_revision", "current_review": { "content", "instructions" } }` or `{ "status": "complete", "total_word_count" }` |
 | `advance-chapter <repo-path>` | Advance to next chapter: check next chapter file exists (returns `needs_chapter_outline` if missing), update `.ink-state.yml`, commit. Does NOT push. | JSON: `{ "status": "advanced", "new_chapter", "chapter_file", "chapter_content" }` or `{ "status": "needs_chapter_outline", "chapter", "chapter_file" }` or `{ "status": "error", "message" }` |
 | `reset <repo-path>` | Wipe all book content; user must type repo name to confirm | Console |
@@ -125,7 +126,7 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 ```
 src/
   main.rs          ← clap router + top-level error handling
-  init.rs          ← init + reset subcommands; inquire TUI; scaffold + Q&A
+  init.rs          ← seed + init + reset subcommands; inquire TUI; scaffold + Q&A
   git.rs           ← git operations (pre-flight, snapshot, branch, push)
   context.rs       ← context aggregation, INK instruction extraction, JSON output
   maintenance.rs   ← session-close (split/pagination/Full_Book), complete, advance-chapter, rollback
