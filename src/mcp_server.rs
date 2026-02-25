@@ -1,3 +1,7 @@
+// The MCP server compiles all shared modules but intentionally exposes only a
+// subset of their functions. Suppress dead-code lint for this binary target.
+#![allow(dead_code)]
+
 mod config;
 mod context;
 mod git;
@@ -189,6 +193,20 @@ fn tools_list() -> Value {
                     },
                     "required": ["repo_path"]
                 }
+            },
+            {
+                "name": "doctor",
+                "description": "Validate the book repository: checks required files, Config.yml validity, git remote configuration and reachability, draft branch, and session lock state. Returns a list of named checks each with ok/detail. Run this before registering a cron job.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Absolute path to the book repository"
+                        }
+                    },
+                    "required": ["repo_path"]
+                }
             }
         ]
     })
@@ -246,6 +264,8 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
         "status" => maintenance::book_status(&repo_path).map_err(|e| e.to_string()),
 
         "update_agents" => init::update_agents(&repo_path).map_err(|e| e.to_string()),
+
+        "doctor" => maintenance::doctor(&repo_path).map_err(|e| e.to_string()),
 
         _ => Err(format!("Unknown tool: {name}")),
     }

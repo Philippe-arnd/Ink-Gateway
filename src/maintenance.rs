@@ -422,14 +422,12 @@ pub fn complete_session(repo: &Path) -> Result<serde_json::Value> {
     let total_word_count = if !current_content.trim().is_empty() {
         let (_, new_total) = append_to_full_book(&book_path, &current_content, config.words_per_page)?;
         new_total
+    } else if book_path.exists() {
+        let content = std::fs::read_to_string(&book_path)
+            .with_context(|| "Failed to read Full_Book.md for word count")?;
+        count_prose_words(&content)
     } else {
-        if book_path.exists() {
-            let content = std::fs::read_to_string(&book_path)
-                .with_context(|| "Failed to read Full_Book.md for word count")?;
-            count_prose_words(&content)
-        } else {
-            0
-        }
+        0
     };
 
     // Write completion placeholder to current.md
@@ -449,13 +447,22 @@ pub fn complete_session(repo: &Path) -> Result<serde_json::Value> {
     std::fs::write(&complete_path, "")
         .with_context(|| "Failed to write COMPLETE")?;
 
-    // Commit and push
+    // Commit and push main + draft so both branches reflect the sealed book
     git::run_git(repo, &["add", "-A"])
         .with_context(|| "Failed to git add for final seal")?;
     git::run_git(repo, &["commit", "-m", "book: complete — final seal"])
         .with_context(|| "Failed to commit completion")?;
     git::run_git(repo, &["push", "origin", "main"])
-        .with_context(|| "Failed to push completion")?;
+        .with_context(|| "Failed to push main for completion")?;
+
+    // Keep draft in sync — best-effort, not fatal if draft never existed
+    if git::run_git(repo, &["show-ref", "--verify", "refs/heads/draft"]).is_ok() {
+        git::run_git(repo, &["branch", "-f", "draft", "main"])
+            .with_context(|| "Failed to fast-forward draft to main")?;
+        if let Err(e) = git::run_git(repo, &["push", "origin", "draft"]) {
+            tracing::warn!("Could not push draft after completion (non-fatal): {}", e);
+        }
+    }
 
     Ok(serde_json::json!({
         "status": "complete",
@@ -565,6 +572,147 @@ pub fn book_status(repo: &Path) -> Result<serde_json::Value> {
         "completion_ready": completion_ready,
         "session_active": lock_path.exists(),
         "session_age_seconds": lock_age_seconds,
+    }))
+}
+
+// ─── doctor ───────────────────────────────────────────────────────────────────
+
+/// Validate the book repository structure and return a list of issues.
+/// Checks file presence, Config.yml validity, git remote, draft branch, and lock state.
+/// Note: the `git_remote_reachable` check makes a network call and may be slow on an
+/// unreachable remote — all other checks are local-only.
+pub fn doctor(repo: &Path) -> Result<serde_json::Value> {
+    let mut checks: Vec<serde_json::Value> = Vec::new();
+    let mut all_ok = true;
+
+    macro_rules! check {
+        ($name:expr, $ok:expr, $detail:expr) => {{
+            let ok: bool = $ok;
+            if !ok { all_ok = false; }
+            checks.push(serde_json::json!({
+                "name": $name,
+                "ok": ok,
+                "detail": $detail,
+            }));
+        }};
+    }
+
+    // ── Required Global Material files ───────────────────────────────────────
+    for filename in &["Config.yml", "Soul.md", "Outline.md", "Characters.md", "Lore.md"] {
+        let path = repo.join("Global Material").join(filename);
+        check!(
+            format!("global_{}", filename.to_lowercase().replace('.', "_")),
+            path.exists(),
+            if path.exists() { serde_json::Value::Null } else {
+                serde_json::json!(format!("Global Material/{filename} not found"))
+            }
+        );
+    }
+
+    // ── Config.yml parses and validates ──────────────────────────────────────
+    match Config::load(repo) {
+        Ok(cfg) => {
+            check!("config_valid", true, serde_json::Value::Null);
+
+            // ── Current chapter outline exists ────────────────────────────
+            let state = InkState::load(repo).unwrap_or_default();
+            let chapter_file = format!(
+                "Chapters material/Chapter_{:02}.md",
+                state.current_chapter
+            );
+            let chapter_path = repo.join(&chapter_file);
+            check!(
+                "current_chapter_outline",
+                chapter_path.exists(),
+                if chapter_path.exists() { serde_json::Value::Null } else {
+                    serde_json::json!(format!("{chapter_file} not found"))
+                }
+            );
+
+            // ── Words-per-session sanity ──────────────────────────────────
+            let sane = cfg.words_per_session >= 100 && cfg.words_per_session <= 10_000;
+            check!(
+                "words_per_session_sane",
+                sane,
+                if sane { serde_json::Value::Null } else {
+                    serde_json::json!(format!(
+                        "words_per_session={} — expected 100–10000",
+                        cfg.words_per_session
+                    ))
+                }
+            );
+        }
+        Err(e) => {
+            check!("config_valid", false, serde_json::json!(e.to_string()));
+            // Skip chapter check — can't read state without a valid config dir
+        }
+    }
+
+    // ── Review/current.md ────────────────────────────────────────────────────
+    let current_md = repo.join("Review").join("current.md");
+    check!(
+        "current_md",
+        current_md.exists(),
+        if current_md.exists() { serde_json::Value::Null } else {
+            serde_json::json!("Review/current.md not found — run init first")
+        }
+    );
+
+    // ── Git remote configured ─────────────────────────────────────────────────
+    let remote_url = git::run_git(repo, &["remote", "get-url", "origin"]);
+    check!(
+        "git_remote_configured",
+        remote_url.is_ok(),
+        match &remote_url {
+            Ok(url) => serde_json::json!(url),
+            Err(e)  => serde_json::json!(e.to_string()),
+        }
+    );
+
+    // ── Git remote reachable (network call) ───────────────────────────────────
+    if remote_url.is_ok() {
+        match git::run_git(repo, &["ls-remote", "--exit-code", "--heads", "origin"]) {
+            Ok(_) => check!("git_remote_reachable", true, serde_json::Value::Null),
+            Err(e) => check!("git_remote_reachable", false, serde_json::json!(e.to_string())),
+        }
+    }
+
+    // ── Draft branch exists locally ───────────────────────────────────────────
+    let draft_exists =
+        git::run_git(repo, &["show-ref", "--verify", "refs/heads/draft"]).is_ok();
+    check!(
+        "draft_branch",
+        draft_exists,
+        if draft_exists { serde_json::Value::Null } else {
+            serde_json::json!("draft branch not found locally — will be created at next session-open")
+        }
+    );
+
+    // ── Session lock ──────────────────────────────────────────────────────────
+    let lock_path = repo.join(".ink-running");
+    if lock_path.exists() {
+        let age = crate::context::read_lock_age(repo);
+        let timeout = Config::load(repo)
+            .map(|c| c.session_timeout_minutes)
+            .unwrap_or(60);
+        let stale = age.map(|a| a > timeout).unwrap_or(false);
+        check!(
+            "session_lock",
+            !stale,
+            serde_json::json!(format!(
+                "lock exists (age: {}m, timeout: {}m) — {}",
+                age.unwrap_or(-1),
+                timeout,
+                if stale { "STALE — will be recovered at next session-open" } else { "active session in progress" }
+            ))
+        );
+    } else {
+        check!("session_lock", true, serde_json::Value::Null);
+    }
+
+    Ok(serde_json::json!({
+        "status": if all_ok { "healthy" } else { "issues" },
+        "checks": checks,
     }))
 }
 

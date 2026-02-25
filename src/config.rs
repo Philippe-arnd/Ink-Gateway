@@ -31,6 +31,7 @@ fn default_current_review_window_words() -> u32 {
 #[serde(rename_all = "snake_case")]
 pub struct Config {
     #[serde(default = "default_language")]
+    #[allow(dead_code)] // read by the ink-engine agent via JSON, not by Rust code
     pub language: String,
     pub target_length: u32,
     pub chapter_count: u32,

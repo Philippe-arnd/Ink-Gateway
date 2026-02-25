@@ -50,7 +50,7 @@ impl InkState {
         std::fs::write(&tmp_path, content)
             .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
         std::fs::rename(&tmp_path, &path)
-            .with_context(|| format!("Failed to atomically replace .ink-state.yml"))?;
+            .with_context(|| "Failed to atomically replace .ink-state.yml")?;
         Ok(())
     }
 }

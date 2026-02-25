@@ -86,6 +86,11 @@ enum Commands {
         /// Path to the book repository
         repo_path: PathBuf,
     },
+    /// Validate repository structure, config, git remote, and session state
+    Doctor {
+        /// Path to the book repository
+        repo_path: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -150,6 +155,10 @@ fn main() -> Result<()> {
         }
         Commands::UpdateAgents { repo_path } => {
             let result = init::update_agents(&repo_path)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Commands::Doctor { repo_path } => {
+            let result = maintenance::doctor(&repo_path)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }

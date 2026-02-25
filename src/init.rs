@@ -27,7 +27,7 @@ ink-cli --version
 If not found, install it:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/install.sh | bash
 ```
 
 ---
