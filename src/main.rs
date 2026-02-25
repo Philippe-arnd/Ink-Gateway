@@ -76,6 +76,16 @@ enum Commands {
         /// Path to the book repository (must be an existing git repo)
         repo_path: PathBuf,
     },
+    /// Show current book state: chapter, word counts, lock status, completion
+    Status {
+        /// Path to the book repository
+        repo_path: PathBuf,
+    },
+    /// Refresh AGENTS.md (and CLAUDE.md/GEMINI.md) from the latest embedded template
+    UpdateAgents {
+        /// Path to the book repository
+        repo_path: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -132,6 +142,14 @@ fn main() -> Result<()> {
         }
         Commands::Seed { repo_path } => {
             let result = init::run_seed(&repo_path)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Commands::Status { repo_path } => {
+            let result = maintenance::book_status(&repo_path)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Commands::UpdateAgents { repo_path } => {
+            let result = init::update_agents(&repo_path)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }

@@ -5,23 +5,91 @@ on:
     tags: ['v*']
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: false
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+            use_cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
-      - run: sudo apt-get install -y musl-tools
+      - name: Install musl-tools (Linux x86_64)
+        if: matrix.os == 'ubuntu-latest' && !matrix.use_cross
+        run: sudo apt-get install -y musl-tools
 
-      - run: cargo build --release --target x86_64-unknown-linux-musl
+      - name: Install cross (Linux aarch64)
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Build with cross
+        if: matrix.use_cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build native
+        if: ${{ !matrix.use_cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binaries
+        shell: bash
+        run: |
+          TARGET="${{ matrix.target }}"
+          cp "target/$TARGET/release/ink-cli"          "ink-cli-$TARGET"
+          cp "target/$TARGET/release/ink-gateway-mcp" "ink-gateway-mcp-$TARGET"
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          TARGET="${{ matrix.target }}"
+          if command -v sha256sum > /dev/null 2>&1; then
+            sha256sum "ink-cli-$TARGET" "ink-gateway-mcp-$TARGET" > "checksums-$TARGET.txt"
+          else
+            shasum -a 256 "ink-cli-$TARGET" "ink-gateway-mcp-$TARGET" > "checksums-$TARGET.txt"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: |
+            ink-cli-${{ matrix.target }}
+            ink-gateway-mcp-${{ matrix.target }}
+            checksums-${{ matrix.target }}.txt
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Merge checksums
+        run: cat checksums-*.txt > checksums.sha256
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            target/x86_64-unknown-linux-musl/release/ink-cli
-            target/x86_64-unknown-linux-musl/release/ink-gateway-mcp
+            ink-cli-*
+            ink-gateway-mcp-*
+            checksums.sha256

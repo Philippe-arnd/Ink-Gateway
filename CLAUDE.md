@@ -104,7 +104,7 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 
 ## Implementation Language & Key Files
 
-- **`ink-cli`** — Rust binary. Eight subcommands: `seed`, `init`, `session-open`, `session-close`, `complete`, `advance-chapter`, `reset`, `rollback`.
+- **`ink-cli`** — Rust binary. Ten subcommands: `seed`, `init`, `session-open`, `session-close`, `complete`, `advance-chapter`, `reset`, `rollback`, `status`, `update-agents`.
 - **`ink-gateway-mcp`** — MCP server binary. Exposes six tools (`session_open`, `session_close`, `complete`, `advance_chapter`, `init`, `seed`) as native MCP tools over stdio JSON-RPC 2.0. Register with `claude mcp add ink-gateway -- ~/.local/bin/ink-gateway-mcp`.
 - **`Cargo.toml`** — dependency manifest. Version format: `YYYY.M.DD-N`. Both binaries are in the same crate.
 - **`ink-engine` AGENTS.md** (Phase 3) — Writing engine system prompt + inline tool definitions.
@@ -121,6 +121,8 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 | `advance-chapter <repo-path>` | Advance to next chapter: check next chapter file exists (returns `needs_chapter_outline` if missing), update `.ink-state.yml`, commit. Does NOT push. | JSON: `{ "status": "advanced", "new_chapter", "chapter_file", "chapter_content" }` or `{ "status": "needs_chapter_outline", "chapter", "chapter_file" }` or `{ "status": "error", "message" }` |
 | `reset <repo-path>` | Wipe all book content; user must type repo name to confirm | Console |
 | `rollback <repo-path>` | Hard-reset to most recent ink-* tag + force-push; y/n confirmation | Console |
+| `status <repo-path>` | Read-only snapshot: chapter, word counts, lock status, completion flags. No git ops. | JSON |
+| `update-agents <repo-path>` | Overwrite `AGENTS.md` (and `CLAUDE.md`/`GEMINI.md` if present) from latest embedded template; commit + push. | JSON |
 
 ### Source Layout
 

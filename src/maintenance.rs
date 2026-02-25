@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use inquire::Confirm;
 use chrono::Local;
 use regex::Regex;
@@ -23,9 +23,10 @@ fn ink_re() -> &'static Regex {
 
 // ─── Output types ─────────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ClosePayload {
     pub session_word_count: u32,
+    pub expected_words_per_session: u32,
     pub total_word_count: u32,
     pub target_length: u32,
     pub completion_ready: bool,
@@ -186,9 +187,7 @@ pub fn close_session(
 
     // Guard: lock must exist
     if !lock_path.exists() {
-        let error = serde_json::json!({"error": "no active session", "status": "error"});
-        println!("{}", serde_json::to_string_pretty(&error).unwrap());
-        std::process::exit(1);
+        return Err(anyhow!("no active session — run session-open first"));
     }
 
     let config = Config::load(repo)?;
@@ -351,6 +350,7 @@ pub fn close_session(
 
     Ok(ClosePayload {
         session_word_count,
+        expected_words_per_session: config.words_per_session,
         total_word_count,
         target_length: config.target_length,
         completion_ready,
@@ -368,9 +368,7 @@ pub fn complete_session(repo: &Path) -> Result<serde_json::Value> {
 
     // Guard: COMPLETE must not already exist
     if complete_path.exists() {
-        let error = serde_json::json!({"error": "book already complete", "status": "error"});
-        println!("{}", serde_json::to_string_pretty(&error).unwrap());
-        std::process::exit(1);
+        return Err(anyhow!("book already complete — COMPLETE marker already exists"));
     }
 
     // Ensure we're on main
@@ -520,6 +518,56 @@ pub fn advance_chapter(repo: &Path) -> Result<serde_json::Value> {
     }))
 }
 
+// ─── status ───────────────────────────────────────────────────────────────────
+
+/// Return a lightweight read-only JSON snapshot of the book's current state.
+/// Reads only local files — no git operations, no network.
+pub fn book_status(repo: &Path) -> Result<serde_json::Value> {
+    let state = InkState::load(repo)?;
+    let config = Config::load(repo).ok();
+
+    let book_path = repo.join("Current version").join("Full_Book.md");
+    let total_word_count = if book_path.exists() {
+        let content = std::fs::read_to_string(&book_path)
+            .with_context(|| "Failed to read Full_Book.md")?;
+        count_prose_words(&content)
+    } else {
+        0
+    };
+
+    let lock_path = repo.join(".ink-running");
+    let lock_age_seconds = crate::context::read_lock_age(repo);
+    let complete = repo.join("COMPLETE").exists();
+    let initialized = repo.join("Global Material").join("Config.yml").exists();
+
+    let (target_length, words_per_chapter, words_per_session, chapter_close_suggested, completion_ready) =
+        match &config {
+            Some(c) => (
+                c.target_length,
+                c.words_per_chapter,
+                c.words_per_session,
+                state.current_chapter_word_count >= (c.words_per_chapter as f64 * 0.9) as u32,
+                total_word_count >= (c.target_length as f64 * 0.9) as u32,
+            ),
+            None => (0, 0, 0, false, false),
+        };
+
+    Ok(serde_json::json!({
+        "initialized": initialized,
+        "complete": complete,
+        "current_chapter": state.current_chapter,
+        "current_chapter_word_count": state.current_chapter_word_count,
+        "words_per_chapter": words_per_chapter,
+        "chapter_close_suggested": chapter_close_suggested,
+        "total_word_count": total_word_count,
+        "target_length": target_length,
+        "words_per_session": words_per_session,
+        "completion_ready": completion_ready,
+        "session_active": lock_path.exists(),
+        "session_age_seconds": lock_age_seconds,
+    }))
+}
+
 // ─── rollback ─────────────────────────────────────────────────────────────────
 
 /// Revert main (and draft) to the snapshot tag created at the start of the
@@ -581,4 +629,108 @@ pub fn rollback_session(repo_path: &Path) -> Result<()> {
     println!("  Run the next session normally when ready.\n");
 
     Ok(())
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_words_ignores_html_comment_lines() {
+        let content = "Hello world\n<!-- PAGE 1 -->\nFoo bar baz";
+        assert_eq!(count_prose_words(content), 5);
+    }
+
+    #[test]
+    fn count_words_empty_input() {
+        assert_eq!(count_prose_words(""), 0);
+    }
+
+    #[test]
+    fn find_instruction_matches_author_comment() {
+        let content = "Some prose\n<!-- INK: make this better -->\nMore prose";
+        assert!(find_first_ink_instruction(content).is_some());
+    }
+
+    #[test]
+    fn find_instruction_ignores_engine_new_marker() {
+        let content = "<!-- INK:NEW:START -->\nProse\n<!-- INK:NEW:END -->";
+        assert!(find_first_ink_instruction(content).is_none());
+    }
+
+    #[test]
+    fn find_instruction_ignores_engine_reworked_marker() {
+        let content = "<!-- INK:REWORKED:START -->\nProse\n<!-- INK:REWORKED:END -->";
+        assert!(find_first_ink_instruction(content).is_none());
+    }
+
+    #[test]
+    fn find_instruction_skips_engine_markers_to_find_author() {
+        let content =
+            "<!-- INK:NEW:START -->\nProse\n<!-- INK:NEW:END -->\n<!-- INK: fix this -->";
+        let pos = find_first_ink_instruction(content).expect("should find author instruction");
+        assert!(content[pos..].starts_with("<!-- INK: fix this -->"));
+    }
+
+    #[test]
+    fn strip_engine_markers_removes_start_end_lines() {
+        let content =
+            "Before\n<!-- INK:NEW:START -->\nNew prose\n<!-- INK:NEW:END -->\nAfter";
+        let stripped = strip_engine_markers(content);
+        assert!(!stripped.contains("<!-- INK:NEW:START -->"));
+        assert!(!stripped.contains("<!-- INK:NEW:END -->"));
+        assert!(stripped.contains("New prose"));
+        assert!(stripped.contains("Before"));
+        assert!(stripped.contains("After"));
+    }
+
+    #[test]
+    fn strip_engine_markers_handles_reworked() {
+        let content = "A\n<!-- INK:REWORKED:START -->\nB\n<!-- INK:REWORKED:END -->\nC";
+        let stripped = strip_engine_markers(content);
+        assert!(!stripped.contains("INK:REWORKED"));
+        assert!(stripped.contains('B'));
+    }
+
+    #[test]
+    fn pagination_inserts_marker_at_boundary() {
+        // Build a single paragraph of 300 words; with words_per_page=250 and
+        // start_word_count=0 there should be a PAGE 2 marker inserted.
+        let para = "word ".repeat(300);
+        let result = insert_pagination(0, para.trim(), 250);
+        assert!(result.contains("<!-- PAGE 2 -->"), "expected PAGE 2 in: {result}");
+    }
+
+    #[test]
+    fn pagination_disabled_when_words_per_page_is_zero() {
+        let content = "Some content here";
+        let result = insert_pagination(0, content, 0);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn pagination_respects_existing_word_count() {
+        // Already at 240 words; next page boundary is 250. A 20-word paragraph
+        // should trigger a marker.
+        let para = "word ".repeat(20);
+        let result = insert_pagination(240, para.trim(), 250);
+        assert!(result.contains("<!-- PAGE 2 -->"), "expected PAGE 2 in: {result}");
+    }
+
+    #[test]
+    fn session_close_guard_returns_err_without_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = close_session(tmp.path(), "prose", None, &[]).unwrap_err();
+        assert!(err.to_string().contains("no active session"));
+    }
+
+    #[test]
+    fn complete_guard_returns_err_when_already_complete() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("COMPLETE"), "").unwrap();
+        let err = complete_session(tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("already complete"));
+    }
 }

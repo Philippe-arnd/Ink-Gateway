@@ -122,6 +122,8 @@ The MCP server exposes `session_open`, `session_close`, `complete`, `advance_cha
 | `ink-cli advance-chapter <repo>` | 📑 Advance to next chapter — update `.ink-state.yml`, commit (no push) |
 | `ink-cli reset <repo>` | 🗑️ Wipe all content — allows re-running `init` (confirmation required) |
 | `ink-cli rollback <repo>` | ⏪ Revert to before the last session — force-push (confirmation required) |
+| `ink-cli status <repo>` | 📊 Read-only snapshot — chapter, word counts, lock status, completion flags |
+| `ink-cli update-agents <repo>` | 🔄 Refresh `AGENTS.md` (and seed files) from the latest embedded template |
 
 ---
 

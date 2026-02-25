@@ -1,6 +1,6 @@
 [package]
 name = "ink-cli"
-version = "2026.2.25-1"
+version = "2026.2.25-2"
 edition = "2021"
 
 [[bin]]
@@ -22,3 +22,6 @@ anyhow = "1.0"
 inquire = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"

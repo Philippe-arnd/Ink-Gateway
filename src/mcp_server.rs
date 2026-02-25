@@ -161,6 +161,34 @@ fn tools_list() -> Value {
                     },
                     "required": ["repo_path"]
                 }
+            },
+            {
+                "name": "status",
+                "description": "Return a lightweight read-only snapshot of the book's current state: chapter, word counts, lock status, and completion flags. No git operations — reads local files only.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Absolute path to the book repository"
+                        }
+                    },
+                    "required": ["repo_path"]
+                }
+            },
+            {
+                "name": "update_agents",
+                "description": "Refresh AGENTS.md (and CLAUDE.md/GEMINI.md if present) with the latest engine instructions embedded in this ink-gateway-mcp build. Commits and pushes. Idempotent.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Absolute path to the book repository"
+                        }
+                    },
+                    "required": ["repo_path"]
+                }
             }
         ]
     })
@@ -214,6 +242,10 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
             let payload = init::run_seed(&repo_path).map_err(|e| e.to_string())?;
             serde_json::to_value(payload).map_err(|e| e.to_string())
         }
+
+        "status" => maintenance::book_status(&repo_path).map_err(|e| e.to_string()),
+
+        "update_agents" => init::update_agents(&repo_path).map_err(|e| e.to_string()),
 
         _ => Err(format!("Unknown tool: {name}")),
     }

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use inquire::{Confirm, Text};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -121,14 +121,7 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
     // Guard: already initialized
     let config_path = repo_path.join("Global Material/Config.yml");
     if config_path.exists() {
-        eprintln!(
-            "{}",
-            serde_json::json!({
-                "error": "repository already initialized",
-                "status": "error"
-            })
-        );
-        std::process::exit(1);
+        return Err(anyhow!("repository already initialized — Global Material/Config.yml exists"));
     }
 
     let mut files_created: Vec<String> = Vec::new();
@@ -640,4 +633,70 @@ fn commit_qa_answers(repo_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ─── update-agents ────────────────────────────────────────────────────────────
+
+/// Overwrite `AGENTS.md` (and `CLAUDE.md`/`GEMINI.md` if present) with the
+/// latest versions embedded in this build. Commits and pushes. Idempotent.
+pub fn update_agents(repo_path: &Path) -> Result<serde_json::Value> {
+    let mut files_updated: Vec<String> = Vec::new();
+
+    // Always refresh AGENTS.md — it's the primary purpose of this command.
+    fs::write(repo_path.join("AGENTS.md"), AGENTS_MD)
+        .with_context(|| "Failed to write AGENTS.md")?;
+    files_updated.push("AGENTS.md".to_string());
+
+    // Refresh CLAUDE.md and GEMINI.md only if they already exist (seed files).
+    for name in &["CLAUDE.md", "GEMINI.md"] {
+        let path = repo_path.join(name);
+        if path.exists() {
+            fs::write(&path, SEED_CONTENT)
+                .with_context(|| format!("Failed to write {name}"))?;
+            files_updated.push(name.to_string());
+        }
+    }
+
+    // Stage the updated files.
+    let mut args = vec!["add"];
+    let file_refs: Vec<&str> = files_updated.iter().map(String::as_str).collect();
+    args.extend_from_slice(&file_refs);
+    let status = Command::new("git").args(&args).current_dir(repo_path).status()?;
+    if !status.success() {
+        anyhow::bail!("git add failed");
+    }
+
+    // Skip commit if nothing actually changed.
+    let diff_empty = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(repo_path)
+        .status()?;
+
+    if diff_empty.success() {
+        return Ok(serde_json::json!({
+            "status": "up_to_date",
+            "files_updated": [],
+        }));
+    }
+
+    let commit = Command::new("git")
+        .args(["commit", "-m", "chore: update agent files to latest ink-gateway version"])
+        .current_dir(repo_path)
+        .status()?;
+    if !commit.success() {
+        anyhow::bail!("git commit failed");
+    }
+
+    let push = Command::new("git")
+        .args(["push", "origin", "main"])
+        .current_dir(repo_path)
+        .status()?;
+    if !push.success() {
+        tracing::warn!("git push skipped — no remote configured");
+    }
+
+    Ok(serde_json::json!({
+        "status": "updated",
+        "files_updated": files_updated,
+    }))
 }
