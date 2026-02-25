@@ -10,17 +10,17 @@
 
 ## 🧭 How It Works
 
-Three components sync through GitHub :
+Three components sync through GitHub:
 
 | Component | Role |
 |---|---|
-| ✏️ **Editor** | IDE or Browser-based editor. Auto-commits and pushes every save to GitHub. |
+| ✏️ **Editor** | IDE or browser-based editor. Auto-commits and pushes every save to GitHub. |
 | 🐙 **GitHub** | Single source of truth. Sync layer between editor and engine. |
 | 🤖 **`ink` agent** | Triggered on schedule. Pulls, reads context, writes prose, pushes everything back. |
 
 Each book is an **independent GitHub repository**. The editor syncs human edits throughout the day; the ink agent picks them up at session time, generates new prose, and pushes back.
 
-**Implicit approval:** if the text produced by the engine is not modified by the Author, the draft (Current.md) is accepted at the next session and the engine continues writing. Human edits are the only signal needed.
+**Implicit approval:** if the text produced by the engine is not modified by the author, the draft (`current.md`) is accepted at the next session and the engine continues writing. Human edits are the only signal needed.
 
 ---
 
@@ -59,7 +59,7 @@ COMPLETE               # Written by engine when book is finished
 
 | File | Role | Who touches it |
 |---|---|---|
-| `current.md` | Rolling prose window — last session's output + author instructions | The ink agent reads, analyse the comment and diff made by the Author at every session. The Author adds `<!-- INK: -->` comments for the agent |
+| `current.md` | Rolling prose window — last session's output + author instructions | The ink agent reads and rewrites it every session. The author adds `<!-- INK: -->` comments to direct the engine. |
 | `Full_Book.md` | Vault of all validated prose — auto-managed, read-only for the author | Engine appends at each `session-close`; **never edit manually** |
 
 **Split rule:** everything in `current.md` **before** the first `<!-- INK: [instruction] -->` tag is validated. `session-close` automatically moves it to `Full_Book.md`. The engine then rewrites `current.md` from that split point onwards, marking reworked and new sections with diff markers.
@@ -82,13 +82,33 @@ current.md after a session:
 
 ---
 
-## 🖥️ CLI Reference
+## 🖥️ Installation
 
-Install `ink-cli` on any Linux machine:
+Install both binaries with a single command:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/install.sh | bash
 ```
+
+This installs `ink-cli` and `ink-gateway-mcp` to `~/.local/bin`.
+
+### MCP integration (Claude Code / Gemini CLI)
+
+Once installed, register the MCP server so your AI client can call the tools natively:
+
+```bash
+# Claude Code
+claude mcp add ink-gateway -- ~/.local/bin/ink-gateway-mcp
+
+# Gemini CLI
+gemini mcp add ink-gateway -- ~/.local/bin/ink-gateway-mcp
+```
+
+The MCP server exposes `session_open`, `session_close`, `complete`, `advance_chapter`, `init`, and `seed` as native tools — no shell wrappers needed.
+
+---
+
+## 🛠️ CLI Reference
 
 ### Command overview
 
@@ -221,7 +241,7 @@ Finds the most recent `ink-*` snapshot tag (created at `session-open` time), har
 
 ### Starting a new book
 
-**1. Create a GitHub repo** and clone it in your IDE or sync it with your Markdown editor:
+**1. Create a GitHub repo** and clone it locally:
 
 ```bash
 git clone https://github.com/<github-username>/<book-repo> /path/to/book
@@ -268,64 +288,6 @@ The `--model` flag is the only place the AI model is configured — it is not st
 
 ---
 
-## 🤖 For AI Agents
-
-> Full engine instructions are in `AGENTS.md` at the root of every scaffolded book repo. Everything the engine needs — install step, session flow, guardrails — is there.
-
-### Step 0 — Verify `ink-cli` is installed
-
-```bash
-ink-cli --version
-```
-
-If not found:
-
-```bash
-curl -sSfL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/install.sh | sh
-```
-
-### Step 1 — Clone or sync the repository
-
-```bash
-# First time:
-git clone <repo-url> /data/ink-gateway/books/<repo-name>
-
-# Already cloned:
-git -C /data/ink-gateway/books/<repo-name> pull origin main
-```
-
-### Step 2 — Determine what to do
-
-| `Global Material/Config.yml` | Action |
-|---|---|
-| **Absent** | Run `ink-cli init` — then follow the Q&A + extrapolation flow |
-| **Present** | Run a writing session — follow `AGENTS.md` |
-
-### Step 3 — Init (first time only)
-
-```bash
-ink-cli init /data/ink-gateway/books/<repo-name> \
-  --title "<Book Title>" \
-  --author "<Author Name>"
-```
-
-The JSON response includes a `questions` array. Present each question to the author (show `hint` as context). Once you have all answers, **extrapolate** each into rich, detailed content before writing to `target_file`. Commit and push. Stop — the book is ready.
-
-### Step 4 — Session loop (every scheduled run)
-
-```
-session-open → abort checks → chapter advance? → analyse current.md
-→ consistency check → generate (rework + new) → session-close → complete?
-```
-
-See `AGENTS.md` in the book repo for the full engine prompt and guardrails.
-
-### Error handling
-
-If `ink-cli` returns `"status": "error"` or exits non-zero — **stop immediately**. Do not retry. Report the full error to the author.
-
----
-
 ## 💰 API Cost Reference
 
 | Model | Per 200-page book |
@@ -343,3 +305,4 @@ If `ink-cli` returns `"status": "error"` or exits non-zero — **stop immediatel
 | **Phase 1** | ✅ Complete | Editor git sync, agent registration, `session-open` |
 | **Phase 2** | ✅ Complete | `session-close`, `complete`, `init`, `reset`, `rollback`, `advance-chapter`, interactive TUI, current.md/Full_Book split, pagination, chapter automation |
 | **Phase 3** | ✅ Complete | `ink-engine` AGENTS.md — full session flow, chapter advancement, completion discipline, rework loop |
+| **Phase 4** | ✅ Complete | `ink-gateway-mcp` — native MCP server for Claude Code and Gemini CLI |

@@ -105,7 +105,8 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 ## Implementation Language & Key Files
 
 - **`ink-cli`** — Rust binary. Eight subcommands: `seed`, `init`, `session-open`, `session-close`, `complete`, `advance-chapter`, `reset`, `rollback`.
-- **`Cargo.toml`** — dependency manifest. Version format: `YYYY.M.DD-N`.
+- **`ink-gateway-mcp`** — MCP server binary. Exposes six tools (`session_open`, `session_close`, `complete`, `advance_chapter`, `init`, `seed`) as native MCP tools over stdio JSON-RPC 2.0. Register with `claude mcp add ink-gateway -- ~/.local/bin/ink-gateway-mcp`.
+- **`Cargo.toml`** — dependency manifest. Version format: `YYYY.M.DD-N`. Both binaries are in the same crate.
 - **`ink-engine` AGENTS.md** (Phase 3) — Writing engine system prompt + inline tool definitions.
 
 ### `ink-cli` Subcommands
@@ -125,7 +126,8 @@ The `--model` flag (or equivalent in your gateway) is the only place the AI mode
 
 ```
 src/
-  main.rs          ← clap router + top-level error handling
+  main.rs          ← ink-cli entry point: clap router + top-level error handling
+  mcp_server.rs    ← ink-gateway-mcp entry point: JSON-RPC 2.0 stdio MCP server
   init.rs          ← seed + init + reset subcommands; inquire TUI; scaffold + Q&A
   git.rs           ← git operations (pre-flight, snapshot, branch, push)
   context.rs       ← context aggregation, INK instruction extraction, JSON output

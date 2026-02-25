@@ -2,15 +2,23 @@
 set -euo pipefail
 
 REPO="Philippe-arnd/Ink-Gateway"
-BIN="ink-cli"
-DEST="${1:-/usr/local/bin}"
+DEST="${1:-$HOME/.local/bin}"
 
 LATEST=$(curl -sSf "https://api.github.com/repos/${REPO}/releases/latest" \
   | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
 
-TMP=$(mktemp)
-curl -sSfL "https://github.com/${REPO}/releases/download/${LATEST}/${BIN}" -o "$TMP"
-chmod +x "$TMP"
-mv "$TMP" "${DEST}/${BIN}"
+mkdir -p "${DEST}"
 
-echo "ink-cli ${LATEST} installed → ${DEST}/${BIN}"
+for BIN in ink-cli ink-gateway-mcp; do
+  TMP=$(mktemp)
+  curl -sSfL "https://github.com/${REPO}/releases/download/${LATEST}/${BIN}" -o "$TMP"
+  chmod +x "$TMP"
+  mv "$TMP" "${DEST}/${BIN}"
+  echo "${BIN} ${LATEST} installed → ${DEST}/${BIN}"
+done
+
+echo ""
+echo "Register the MCP server with your AI client:"
+echo "  claude mcp add ink-gateway -- ${DEST}/ink-gateway-mcp"
+echo "  # or for Gemini CLI:"
+echo "  gemini mcp add ink-gateway -- ${DEST}/ink-gateway-mcp"
