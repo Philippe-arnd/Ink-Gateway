@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use inquire::{Confirm, Text};
+use inquire::{Confirm, Select, Text};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
@@ -54,11 +54,17 @@ Derive `--author` from the GitHub URL, repository metadata, or ask the user if u
 
 The command outputs JSON with a `questions` array. Each entry has `question`, `hint`, and `target_file`.
 
-**Ask the author each question in order.** Once you have all 10 answers, extrapolate each brief answer into rich, detailed content, then write the files directly:
+**Ask the author each question in order.** Once you have all 13 answers, extrapolate each brief answer into rich, detailed content, then write the files directly:
+
+Questions 1–4 populate `Config.yml`:
+- Q1: language → `language:` field
+- Q2: book type (Flash fiction / Short story / Novel) — use to infer defaults for Q3 and Q4
+- Q3: target pages → `target_length: <pages × 250>`; also compute `chapter_count: <ceil(target_words / 3000)>`
+- Q4: pages per session → `words_per_session: <pages × 250>`
 
 | File | What to write |
 |---|---|
-| `Global Material/Config.yml` | Update only the `language:` field. Do not overwrite other fields. |
+| `Global Material/Config.yml` | Update `language:`, `target_length:`, `words_per_session:`, and `chapter_count:` fields. Do not overwrite other fields. |
 | `Global Material/Soul.md` | Full style guide (2–4 paragraphs): narrator voice, sentence rhythm, vocabulary level, emotional register, what to avoid. |
 | `Global Material/Characters.md` | Full character sheet per character: appearance hints, personality, motivation, internal conflict, key relationships, arc across the book. |
 | `Global Material/Outline.md` | Structured plot outline: opening act, rising tension, midpoint reversal, dark night of the soul, climax, resolution, central stakes, thematic undercurrent. |
@@ -100,6 +106,17 @@ pub struct Question {
     pub question: &'static str,
     pub hint: &'static str,
     pub target_file: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<&'static str>>,
+}
+
+/// Suggested (target_pages, session_pages) defaults for each book type.
+fn suggested_defaults(book_type: &str) -> (u32, u32) {
+    match book_type {
+        "Flash fiction" => (5, 2),
+        "Short story" => (20, 3),
+        _ => (250, 6), // Novel
+    }
 }
 
 #[derive(Serialize)]
@@ -176,56 +193,85 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
             question: "What language should the engine write in?",
             hint: "e.g. English, French, Spanish, German — use the full language name",
             target_file: "Global Material/Config.yml",
+            options: None,
+        },
+        // ── Book Format ───────────────────────────────────────────────────────
+        Question {
+            question: "What type of book are you writing?",
+            hint: "Flash fiction: ~1–5 pages · Short story: ~5–30 pages · Novel: ~150–400 pages",
+            target_file: "Global Material/Config.yml",
+            options: Some(vec!["Flash fiction", "Short story", "Novel"]),
+        },
+        Question {
+            question: "How many pages should the finished book be?",
+            hint: "Approximate target — each page is ~250 words. Press Enter to accept the suggestion.",
+            target_file: "Global Material/Config.yml",
+            options: None,
+        },
+        Question {
+            question: "How many pages should the engine write per session?",
+            hint: "Each session runs on schedule. Press Enter to accept the suggestion.",
+            target_file: "Global Material/Config.yml",
+            options: None,
         },
         // ── Voice & Style ──────────────────────────────────────────────────────
         Question {
             question: "What is the genre and overall tone?",
             hint: "e.g. Dark fantasy with literary prose, melancholic and immersive",
             target_file: "Global Material/Soul.md",
+            options: None,
         },
         Question {
             question: "What is the narrator perspective and tense?",
             hint: "e.g. Third-person limited, past tense, close to the protagonist",
             target_file: "Global Material/Soul.md",
+            options: None,
         },
         // ── Characters ─────────────────────────────────────────────────────────
         Question {
             question: "Who is the protagonist? Give a name and one defining trait.",
             hint: "e.g. Mara, a disgraced soldier haunted by a massacre she survived",
             target_file: "Global Material/Characters.md",
+            options: None,
         },
         Question {
             question: "Who or what is the main antagonist or obstacle?",
             hint: "e.g. The Conclave, a religious order that controls all magic",
             target_file: "Global Material/Characters.md",
+            options: None,
         },
         // ── Plot Arc ───────────────────────────────────────────────────────────
         Question {
             question: "How does the story open? What kicks it off?",
             hint: "1-2 sentences — the inciting event that sets everything in motion",
             target_file: "Global Material/Outline.md",
+            options: None,
         },
         Question {
             question: "What is the midpoint turning point?",
             hint: "1-2 sentences — the moment that changes everything for the protagonist",
             target_file: "Global Material/Outline.md",
+            options: None,
         },
         Question {
             question: "How does the story end?",
             hint: "1-2 sentences — the resolution and what the protagonist gains or loses",
             target_file: "Global Material/Outline.md",
+            options: None,
         },
         // ── World & Setting ────────────────────────────────────────────────────
         Question {
             question: "Describe the world and setting.",
             hint: "e.g. A crumbling empire on the edge of a magical desert, post-industrial era",
             target_file: "Global Material/Lore.md",
+            options: None,
         },
         // ── Chapter 1 ──────────────────────────────────────────────────────────
         Question {
             question: "What happens in Chapter 1? What should the reader feel by the end?",
             hint: "Key scene(s) and the emotional note the chapter closes on",
             target_file: "Chapters material/Chapter_01.md",
+            options: None,
         },
     ];
 
@@ -408,17 +454,18 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
     // (start_index, section_label)
     let sections: &[(usize, &str)] = &[
         (0, "Language"),
-        (1, "Voice & Style"),
-        (3, "Characters"),
-        (5, "Plot Arc"),
-        (8, "World & Setting"),
-        (9, "Chapter 1"),
+        (1, "Book Format"),
+        (4, "Voice & Style"),
+        (6, "Characters"),
+        (8, "Plot Arc"),
+        (11, "World & Setting"),
+        (12, "Chapter 1"),
     ];
 
     println!();
     println!("  Ink Gateway — Book Setup");
     println!("  «{}» by {}", payload.title, payload.author);
-    println!("  10 questions — about 5 minutes.");
+    println!("  13 questions — about 5 minutes.");
     println!();
 
     let mut answers: Vec<(usize, String)> = Vec::new();
@@ -432,17 +479,51 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
             println!("  ── {} {}", name, "─".repeat(48_usize.saturating_sub(name.len())));
         }
 
-        let answer = match Text::new(q.question)
-            .with_help_message(q.hint)
-            .prompt()
-        {
-            Ok(a) => a,
-            Err(inquire::InquireError::OperationCanceled)
-            | Err(inquire::InquireError::OperationInterrupted) => {
-                println!("\n  Setup cancelled. No files were changed.");
-                return Ok(());
+        let answer = if let Some(ref options) = q.options {
+            // Select prompt (Q1: book type)
+            match Select::new(q.question, options.clone()).prompt() {
+                Ok(a) => a.to_string(),
+                Err(inquire::InquireError::OperationCanceled)
+                | Err(inquire::InquireError::OperationInterrupted) => {
+                    println!("\n  Setup cancelled. No files were changed.");
+                    return Ok(());
+                }
+                Err(e) => anyhow::bail!("Input error on question {}: {}", i + 1, e),
             }
-            Err(e) => anyhow::bail!("Input error on question {}: {}", i + 1, e),
+        } else if i == 2 || i == 3 {
+            // Text with a computed default based on book type (Q1)
+            let book_type = answers.iter().find(|(idx, _)| *idx == 1)
+                .map(|(_, a)| a.as_str())
+                .unwrap_or("Novel");
+            let (default_pages, default_session) = suggested_defaults(book_type);
+            let default_val = if i == 2 { default_pages } else { default_session };
+            let default_str = default_val.to_string();
+            match Text::new(q.question)
+                .with_default(&default_str)
+                .with_help_message(q.hint)
+                .prompt()
+            {
+                Ok(a) => a,
+                Err(inquire::InquireError::OperationCanceled)
+                | Err(inquire::InquireError::OperationInterrupted) => {
+                    println!("\n  Setup cancelled. No files were changed.");
+                    return Ok(());
+                }
+                Err(e) => anyhow::bail!("Input error on question {}: {}", i + 1, e),
+            }
+        } else {
+            match Text::new(q.question)
+                .with_help_message(q.hint)
+                .prompt()
+            {
+                Ok(a) => a,
+                Err(inquire::InquireError::OperationCanceled)
+                | Err(inquire::InquireError::OperationInterrupted) => {
+                    println!("\n  Setup cancelled. No files were changed.");
+                    return Ok(());
+                }
+                Err(e) => anyhow::bail!("Input error on question {}: {}", i + 1, e),
+            }
         };
 
         answers.push((i, answer));
@@ -456,6 +537,19 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
         let display = if answer.trim().is_empty() { "(skipped)" } else { answer.trim() };
         println!("  {}. {}:", i + 1, q.question);
         println!("     {}", display);
+    }
+    // Show derived Config.yml values
+    let target_pages = answers.iter().find(|(i, _)| *i == 2)
+        .and_then(|(_, a)| a.trim().parse::<u32>().ok());
+    let session_pages = answers.iter().find(|(i, _)| *i == 3)
+        .and_then(|(_, a)| a.trim().parse::<u32>().ok());
+    if let (Some(tp), Some(sp)) = (target_pages, session_pages) {
+        let target_words = tp * 250;
+        let session_words = sp * 250;
+        let chapters = ((target_words + 2999) / 3000).max(1);
+        println!();
+        println!("  Config: {} pages → {} words, {} chapters, {} words/session",
+            tp, target_words, chapters, session_words);
     }
     println!();
 
@@ -497,16 +591,28 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
         .map(|(i, a)| (*i, a.as_str()))
         .collect();
 
-    // Config.yml — update `language:` field only (q0)
-    if let Some(&lang) = map.get(&0) {
+    // Config.yml — language (q0), target pages (q2), session pages (q3); chapter_count derived
+    {
         let path = repo_path.join("Global Material/Config.yml");
         let content = fs::read_to_string(&path)
             .with_context(|| "Failed to read Config.yml")?;
+        let lang = map.get(&0).copied().unwrap_or("").trim().to_string();
+        let target_pages = map.get(&2).and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0);
+        let session_pages = map.get(&3).and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0);
+        let target_words = target_pages * 250;
+        let session_words = session_pages * 250;
+        let chapter_count = ((target_words + 2999) / 3000).max(1);
         let updated = content
             .lines()
             .map(|line| {
-                if line.starts_with("language:") {
-                    format!("language: {}", lang.trim())
+                if line.starts_with("language:") && !lang.is_empty() {
+                    format!("language: {}", lang)
+                } else if line.starts_with("target_length:") && target_pages > 0 {
+                    format!("target_length: {}", target_words)
+                } else if line.starts_with("words_per_session:") && session_pages > 0 {
+                    format!("words_per_session: {}", session_words)
+                } else if line.starts_with("chapter_count:") && target_pages > 0 {
+                    format!("chapter_count: {}", chapter_count)
                 } else {
                     line.to_string()
                 }
@@ -517,10 +623,10 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
             .with_context(|| "Failed to write Config.yml")?;
     }
 
-    // Soul.md — genre/tone (q1) + narrator/perspective (q2)
+    // Soul.md — genre/tone (q4) + narrator/perspective (q5)
     {
-        let genre = map.get(&1).copied().unwrap_or("").trim().to_string();
-        let narrator = map.get(&2).copied().unwrap_or("").trim().to_string();
+        let genre = map.get(&4).copied().unwrap_or("").trim().to_string();
+        let narrator = map.get(&5).copied().unwrap_or("").trim().to_string();
         if !genre.is_empty() || !narrator.is_empty() {
             let mut content = String::from("# Soul\n");
             if !genre.is_empty() {
@@ -538,10 +644,10 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
         }
     }
 
-    // Characters.md — protagonist (q3) + antagonist (q4)
+    // Characters.md — protagonist (q6) + antagonist (q7)
     {
-        let protag = map.get(&3).copied().unwrap_or("").trim().to_string();
-        let antag = map.get(&4).copied().unwrap_or("").trim().to_string();
+        let protag = map.get(&6).copied().unwrap_or("").trim().to_string();
+        let antag = map.get(&7).copied().unwrap_or("").trim().to_string();
         if !protag.is_empty() || !antag.is_empty() {
             let mut content = String::from("# Characters\n");
             if !protag.is_empty() {
@@ -559,11 +665,11 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
         }
     }
 
-    // Outline.md — opening (q5) + midpoint (q6) + ending (q7)
+    // Outline.md — opening (q8) + midpoint (q9) + ending (q10)
     {
-        let opening = map.get(&5).copied().unwrap_or("").trim().to_string();
-        let midpoint = map.get(&6).copied().unwrap_or("").trim().to_string();
-        let ending = map.get(&7).copied().unwrap_or("").trim().to_string();
+        let opening = map.get(&8).copied().unwrap_or("").trim().to_string();
+        let midpoint = map.get(&9).copied().unwrap_or("").trim().to_string();
+        let ending = map.get(&10).copied().unwrap_or("").trim().to_string();
         if !opening.is_empty() || !midpoint.is_empty() || !ending.is_empty() {
             let mut content = String::from("# Outline\n");
             if !opening.is_empty() {
@@ -586,8 +692,8 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
         }
     }
 
-    // Lore.md — world/setting (q8)
-    if let Some(&setting) = map.get(&8) {
+    // Lore.md — world/setting (q11)
+    if let Some(&setting) = map.get(&11) {
         let setting = setting.trim();
         if !setting.is_empty() {
             let content = format!("# Lore\n\n## Setting\n\n{}\n", setting);
@@ -596,8 +702,8 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
         }
     }
 
-    // Chapter_01.md — beats (q9)
-    if let Some(&beats) = map.get(&9) {
+    // Chapter_01.md — beats (q12)
+    if let Some(&beats) = map.get(&12) {
         let beats = beats.trim();
         if !beats.is_empty() {
             let content = format!("# Chapter 1\n\n## Beats\n\n{}\n", beats);

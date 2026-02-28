@@ -14,13 +14,11 @@ Three components sync through GitHub:
 
 | Component | Role |
 |---|---|
-| ✏️ **Editor** | IDE or browser-based editor. Auto-commits and pushes every save to GitHub. |
+| ✏️ **Editor** | IDE or browser-based editor. For the Human writer to review and edit. |
 | 🐙 **GitHub** | Single source of truth. Sync layer between editor and engine. |
 | 🤖 **`ink` agent** | Triggered on schedule. Pulls, reads context, writes prose, pushes everything back. |
 
 Each book is an **independent GitHub repository**. The editor syncs human edits throughout the day; the ink agent picks them up at session time, generates new prose, and pushes back.
-
-**Implicit approval:** if the text produced by the engine is not modified by the author, the draft (`current.md`) is accepted at the next session and the engine continues writing. Human edits are the only signal needed.
 
 ---
 
@@ -55,32 +53,6 @@ Each book is an **independent GitHub repository**. The editor syncs human edits 
 COMPLETE               # Written by engine when book is finished
 ```
 
-### The `current.md` / `Full_Book.md` split
-
-| File | Role | Who touches it |
-|---|---|---|
-| `current.md` | Rolling prose window — last session's output + author instructions | The ink agent reads and rewrites it every session. The author adds `<!-- INK: -->` comments to direct the engine. |
-| `Full_Book.md` | Vault of all validated prose — auto-managed, read-only for the author | Engine appends at each `session-close`; **never edit manually** |
-
-**Split rule:** everything in `current.md` **before** the first `<!-- INK: [instruction] -->` tag is validated. `session-close` automatically moves it to `Full_Book.md`. The engine then rewrites `current.md` from that split point onwards, marking reworked and new sections with diff markers.
-
-```
-current.md after a session:
-
-  [clean prose — validated next session]
-
-  <!-- INK: make this paragraph more tense -->   ← author instruction
-
-  <!-- INK:REWORKED:START -->
-  ...engine's rewrite of the instructed passage...
-  <!-- INK:REWORKED:END -->
-
-  <!-- INK:NEW:START -->
-  ...new continuation prose from this session...
-  <!-- INK:NEW:END -->
-```
-
----
 
 ## 🖥️ Installation
 
@@ -92,16 +64,13 @@ curl -fsSL https://raw.githubusercontent.com/Philippe-arnd/Ink-Gateway/main/inst
 
 This installs `ink-cli` and `ink-gateway-mcp` to `~/.local/bin`.
 
-### MCP integration (Claude Code / Gemini CLI)
+### MCP integration 
 
 Once installed, register the MCP server so your AI client can call the tools natively:
 
 ```bash
 # Claude Code
 claude mcp add ink-gateway -- ~/.local/bin/ink-gateway-mcp
-
-# Gemini CLI
-gemini mcp add ink-gateway -- ~/.local/bin/ink-gateway-mcp
 ```
 
 The MCP server exposes `session_open`, `session_close`, `complete`, `advance_chapter`, `init`, and `seed` as native tools — no shell wrappers needed.
@@ -125,117 +94,6 @@ The MCP server exposes `session_open`, `session_close`, `complete`, `advance_cha
 | `ink-cli status <repo>` | 📊 Read-only snapshot — chapter, word counts, lock status, completion flags |
 | `ink-cli update-agents <repo>` | 🔄 Refresh `AGENTS.md` (and seed files) from the latest embedded template |
 
----
-
-### 🌱 `seed` — Bootstrap agent files
-
-```bash
-ink-cli seed <repo-path>
-```
-
-Run once on an empty repo **before** launching any AI agent. Creates `CLAUDE.md` and `GEMINI.md` at the repo root with self-contained instructions that guide any AI CLI (Claude Code, Gemini CLI, etc.) through the full initialization flow — no manual steps beyond this command.
-
-```bash
-# Typical flow
-git clone https://github.com/<user>/<book-repo> /path/to/book
-ink-cli seed /path/to/book    # ← one command, then launch any AI CLI
-claude                         # agent reads CLAUDE.md, runs init --agent, asks questions, extrapolates, commits
-```
-
-`seed` is idempotent — safe to re-run to refresh the bootstrap files. It does **not** initialize the book; that is left to the agent after you answer the 10 questions interactively in the AI chat.
-
----
-
-### 📖 `init` — Scaffold a new book
-
-```bash
-ink-cli init <repo-path> --title "<Book Title>" --author "<Author Name>"
-```
-
-Run once per book in an existing git repository. Creates all directories, seed files, and `AGENTS.md`, then commits.
-
-| Mode | Behaviour |
-|---|---|
-| **TTY** (human at terminal) | 10 inline questions grouped by section (Language / Voice / Characters / Plot / World / Chapter 1). Shows a review summary, asks confirmation, commits and pushes — book ready in one shot. |
-| **TTY + `--agent`** | Same as non-TTY: outputs JSON payload without launching prompts. Use this to hand the questions off to an AI model in your IDE. |
-| **Non-TTY** (agent / pipe) | Outputs JSON with `status`, `files_created`, and a `questions` array (each with `question`, `hint`, `target_file`). The agent presents questions, **extrapolates** answers into rich Global Material, writes files, commits. |
-
----
-
-### 🔓 `session-open` — Start a writing session
-
-```bash
-ink-cli session-open <repo-path>
-```
-
-Fetches from origin, detects and commits local human edits (including uncommitted IDE saves), merges origin, creates a snapshot tag `ink-YYYY-MM-DD-HH-MM`, acquires the session lock, and loads all context. Outputs a full JSON payload.
-
-**Check these abort fields before generating:**
-
-| Field | Meaning |
-|---|---|
-| `kill_requested: true` | Author created `.ink-kill` — stop immediately |
-| `session_already_run: true` | Active lock exists — another session is running |
-| `stale_lock_recovered: true` | Crashed lock cleaned up — proceed normally |
-
----
-
-### 🔒 `session-close` — End a writing session
-
-```bash
-echo "$prose" | ink-cli session-close <repo-path> \
-  --summary "One-paragraph narrative summary" \
-  --human-edit "Chapters material/Chapter_03.md"   # repeatable
-```
-
-Reads new prose from stdin (the engine's new `current.md` content), then:
-1. Extracts the **validated section** from old `current.md` (everything before the first `<!-- INK: -->` instruction), strips engine markers, and appends it to `Full_Book.md` with `<!-- PAGE N -->` pagination markers
-2. Overwrites `Review/current.md` with the new prose from stdin
-3. Updates `current_chapter_word_count` in `.ink-state.yml`
-4. Appends to `Summary.md`, writes a `Changelog/` entry, releases the lock, pushes `main` + `draft`
-
-```json
-{
-  "session_word_count": 1487,
-  "total_word_count": 43210,
-  "target_length": 90000,
-  "current_chapter_word_count": 2341,
-  "completion_ready": false,
-  "status": "closed"
-}
-```
-
-`total_word_count` reflects **validated prose only** (words in `Full_Book.md`, excluding comment markers).
-
----
-
-### 🏁 `complete` — Mark book as finished
-
-```bash
-ink-cli complete <repo-path>
-```
-
-Writes the `COMPLETE` marker, commits, and pushes. Call only when `completion_ready` is `true` **and** all narrative arcs are genuinely fulfilled.
-
----
-
-### 🗑️ `reset` — Wipe all book content
-
-```bash
-ink-cli reset <repo-path>
-```
-
-Removes all book content (Global Material, Chapters, Review, Changelog, Full_Book.md, AGENTS.md). Preserves directory structure and git history. User must **type the repository name** to confirm. After reset, `init` can be run again.
-
----
-
-### ⏪ `rollback` — Revert to before the last session
-
-```bash
-ink-cli rollback <repo-path>
-```
-
-Finds the most recent `ink-*` snapshot tag (created at `session-open` time), hard-resets `main` and `draft` to that state, and force-pushes both branches. The last session's prose, Summary.md entry, and Changelog entry are all removed. Requires **y/n confirmation**.
 
 ---
 
@@ -249,35 +107,26 @@ Finds the most recent `ink-*` snapshot tag (created at `session-open` time), har
 git clone https://github.com/<github-username>/<book-repo> /path/to/book
 ```
 
-**2a. If you want an AI agent to handle the setup** (recommended — richer Global Material):
+**2. Scaffold the book** (interactive Q&A — title, genre, characters, etc.):
 
 ```bash
-ink-cli seed /path/to/book   # creates CLAUDE.md + GEMINI.md, commits, pushes
-claude                        # or: gemini  — agent reads the file, runs init, asks you the 10 questions
+ink-cli init /path/to/book
 ```
 
-**2b. If you prefer to answer the questions yourself at the terminal:**
-
-```bash
-ink-cli init /path/to/book --title "My Book" --author "Jane Doe"
-```
-
-The CLI asks 10 short questions grouped by section — language, voice & style, characters, plot arc, world, and Chapter 1 beats. All inline, no editor needed. Everything is committed automatically.
-
-**3. Register the cron job** on your agent gateway:
+**3. Register the writing agent** via your agent gateway (one cron job per book):
 
 ```bash
 agent-gateway cron add \
   --name "Ink: <Book Title>" \
-  --cron "<cron-schedule>" \
-  --session isolated \
+  --cron "<schedule>" \
   --agent "ink-engine" \
   --model <model-id> \
-  --thinking high \
   --message "Process book: https://github.com/<github-username>/<book-repo>"
 ```
 
-The `--model` flag is the only place the AI model is configured — it is not stored in the book repo.
+The engine runs on schedule from here — no further setup needed.
+
+---
 
 ### Day-to-day authoring
 
