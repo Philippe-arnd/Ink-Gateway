@@ -80,6 +80,17 @@ pub fn commit_human_edits(repo: &Path, files: &[String]) -> Result<()> {
 
     run_git(repo, &["add", "."]).with_context(|| "Failed to git add")?;
 
+    // `git diff --cached --quiet` exits 0 when nothing is staged, 1 when
+    // there are staged changes. The human_edits list may contain files from
+    // collect_diffs_vs_remote that reflect remote-ahead commits rather than
+    // actual local edits — in that case the working tree is clean and there
+    // is nothing to commit.
+    let nothing_staged = run_git(repo, &["diff", "--cached", "--quiet"]).is_ok();
+    if nothing_staged {
+        info!("Nothing staged after git add — skipping commit (working tree already clean)");
+        return Ok(());
+    }
+
     run_git(repo, &["commit", "-m", "chore: human updates"])
         .with_context(|| "Failed to commit human edits")?;
 
