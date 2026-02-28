@@ -616,7 +616,7 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
     if let (Some(tp), Some(sp)) = (target_pages, session_pages) {
         let target_words = tp * 250;
         let session_words = sp * 250;
-        let chapters = ((target_words + 2999) / 3000).max(1);
+        let chapters = target_words.div_ceil(3000).max(1);
         println!();
         println!(
             "  Config: {} pages → {} words, {} chapters, {} words/session",
@@ -675,7 +675,7 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
             .unwrap_or(0);
         let target_words = target_pages * 250;
         let session_words = session_pages * 250;
-        let chapter_count = ((target_words + 2999) / 3000).max(1);
+        let chapter_count = target_words.div_ceil(3000).max(1);
         let updated = content
             .lines()
             .map(|line| {
