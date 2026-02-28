@@ -53,25 +53,43 @@ impl Config {
         let config_path = repo_path.join("Global Material").join("Config.yml");
         let content = std::fs::read_to_string(&config_path)
             .with_context(|| format!("Failed to read Config.yml at {}", config_path.display()))?;
-        let config: Config = serde_yaml::from_str(&content)
-            .with_context(|| "Failed to parse Config.yml")?;
+        let config: Config =
+            serde_yaml::from_str(&content).with_context(|| "Failed to parse Config.yml")?;
         config.validate()?;
         Ok(config)
     }
 
     fn validate(&self) -> Result<()> {
-        anyhow::ensure!(self.target_length > 0,
-            "Config.yml: target_length must be > 0, got {}", self.target_length);
-        anyhow::ensure!(self.chapter_count >= 1,
-            "Config.yml: chapter_count must be >= 1, got {}", self.chapter_count);
-        anyhow::ensure!(self.words_per_session > 0,
-            "Config.yml: words_per_session must be > 0, got {}", self.words_per_session);
-        anyhow::ensure!(self.words_per_chapter > 0,
-            "Config.yml: words_per_chapter must be > 0, got {}", self.words_per_chapter);
-        anyhow::ensure!(self.words_per_page > 0,
-            "Config.yml: words_per_page must be > 0, got {}", self.words_per_page);
-        anyhow::ensure!(self.session_timeout_minutes > 0,
-            "Config.yml: session_timeout_minutes must be > 0, got {}", self.session_timeout_minutes);
+        anyhow::ensure!(
+            self.target_length > 0,
+            "Config.yml: target_length must be > 0, got {}",
+            self.target_length
+        );
+        anyhow::ensure!(
+            self.chapter_count >= 1,
+            "Config.yml: chapter_count must be >= 1, got {}",
+            self.chapter_count
+        );
+        anyhow::ensure!(
+            self.words_per_session > 0,
+            "Config.yml: words_per_session must be > 0, got {}",
+            self.words_per_session
+        );
+        anyhow::ensure!(
+            self.words_per_chapter > 0,
+            "Config.yml: words_per_chapter must be > 0, got {}",
+            self.words_per_chapter
+        );
+        anyhow::ensure!(
+            self.words_per_page > 0,
+            "Config.yml: words_per_page must be > 0, got {}",
+            self.words_per_page
+        );
+        anyhow::ensure!(
+            self.session_timeout_minutes > 0,
+            "Config.yml: session_timeout_minutes must be > 0, got {}",
+            self.session_timeout_minutes
+        );
         Ok(())
     }
 }
