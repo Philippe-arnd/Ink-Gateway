@@ -34,11 +34,13 @@ summary_context_entries: 5
 # chapter_close_suggested: true in the payload — the engine then calls advance-chapter.
 words_per_chapter: 3000
 
-# Maximum words from Review/current.md to include in the session payload.
-# Limits token usage when the rolling window has grown large. Truncation happens
-# at paragraph boundaries so prose context is never cut mid-sentence.
-# Set to 0 for no limit (default — safe for all book sizes).
-current_review_window_words: 0
+# Context window of the AI model used for writing sessions, in tokens.
+# session-open uses this to cap how much of Review/current.md is sent in the
+# payload, reserving headroom for the system prompt, Global Material, chapters,
+# summary, and generated prose. Truncation happens at paragraph boundaries.
+# Default (200000) targets Claude's standard context window.
+# Adjust for other models: Gemini 1.5 Flash = 1000000, GPT-4o = 128000.
+context_window_tokens: 200000
 
 # Approximate number of words per page for pagination markers in Full_Book.md.
 # Standard paperback: 250. Large print: 150. Dense literary: 300.

@@ -204,13 +204,13 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
         },
         Question {
             question: "How many pages should the finished book be?",
-            hint: "Approximate target — each page is ~250 words. Press Enter to accept the suggestion.",
+            hint: "Flash fiction: 5 · Short story: 20 · Novel: 250 — each page ≈ 250 words",
             target_file: "Global Material/Config.yml",
             options: None,
         },
         Question {
             question: "How many pages should the engine write per session?",
-            hint: "Each session runs on schedule. Press Enter to accept the suggestion.",
+            hint: "Flash fiction: 2 · Short story: 3 · Novel: 6 — one session runs on schedule",
             target_file: "Global Material/Config.yml",
             options: None,
         },
@@ -498,9 +498,15 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
             let (default_pages, default_session) = suggested_defaults(book_type);
             let default_val = if i == 2 { default_pages } else { default_session };
             let default_str = default_val.to_string();
+            let words = default_val * 250;
+            let dynamic_hint = if i == 2 {
+                format!("Suggested for {}: {} pages (~{} words) — press Enter to accept or type another number.", book_type, default_val, words)
+            } else {
+                format!("Suggested for {}: {} pages/session (~{} words) — press Enter to accept or type another number.", book_type, default_val, words)
+            };
             match Text::new(q.question)
                 .with_default(&default_str)
-                .with_help_message(q.hint)
+                .with_help_message(&dynamic_hint)
                 .prompt()
             {
                 Ok(a) => a,

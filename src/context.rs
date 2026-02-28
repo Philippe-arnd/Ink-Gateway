@@ -484,16 +484,26 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
     };
     let (mut stripped_review, instructions) = extract_ink_instructions(&raw_review);
 
-    // 14b. Optionally truncate the rolling window to limit token usage.
-    //      Only applied when current_review_window_words > 0.
-    if config.current_review_window_words > 0 {
+    // 14b. Truncate the rolling window to stay within the model's context budget.
+    //      Reserve OVERHEAD_TOKENS for system prompt, Global Material, chapters,
+    //      summary, agent reasoning, and generated prose. The remainder is
+    //      converted to words (÷ 1.35 tokens/word) and used as the hard cap.
+    {
+        const OVERHEAD_TOKENS: u32 = 60_000;
+        const TOKENS_PER_WORD: f64 = 1.35;
+        let max_words = if config.context_window_tokens > OVERHEAD_TOKENS {
+            ((config.context_window_tokens - OVERHEAD_TOKENS) as f64 / TOKENS_PER_WORD) as u32
+        } else {
+            2_000 // minimum fallback for very small context models
+        };
         let word_count = stripped_review.split_whitespace().count() as u32;
-        if word_count > config.current_review_window_words {
+        if word_count > max_words {
             info!(
-                "Step 14b: truncating current.md from {} to last {} words",
-                word_count, config.current_review_window_words
+                "Step 14b: truncating current.md from {} words to last {} words \
+                 (context budget: {} tokens)",
+                word_count, max_words, config.context_window_tokens
             );
-            stripped_review = truncate_to_last_words(&stripped_review, config.current_review_window_words);
+            stripped_review = truncate_to_last_words(&stripped_review, max_words);
         }
     }
 

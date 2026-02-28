@@ -81,7 +81,7 @@ git -C <repo-path> commit -m "init: populate global material from author Q&A"
 git -C <repo-path> push origin main
 ```
 
-Stop. Notify the author the book is ready — they can review `Global Material/` in their editor and start the first writing session when satisfied.
+Stop. Notify the author the book is ready — they can review `Global Material/` in their editor and start the first writing session when satisfied. **Do NOT proceed to §Session Flow after init.** A separate invocation handles the first session.
 
 **If present — run a writing session** following §Session Flow below.
 
@@ -129,7 +129,8 @@ Follow this sequence exactly, every session:
 5. **Consistency check** — Cross-reference any planned changes against `Soul.md`, `Outline.md`, `Characters.md`, `Lore.md`, and `chapters.current`. Make sure the planned prose is coherent with the global arc and chapter goals.
 6. **Generate** — Write `config.words_per_session` words of prose as the new `current.md` content (see §current.md Contract).
 7. **Close** — Call `session_close` with the prose on stdin and optional flags.
-8. **Complete (conditional)** — If `completion_ready` is `true` AND you confirm narrative closure, call `complete`.
+8. **Stop** — After `session_close`, **stop immediately**. Do not call `session_open` again. The next scheduled invocation handles continuation. The sole exception is step 9.
+9. **Complete (conditional)** — If `completion_ready` is `true` AND you confirm narrative closure, call `complete` once (see §Completion Discipline), then stop regardless of the response.
 
 ---
 
@@ -351,7 +352,7 @@ The book is sealed. Take these final steps in order:
 ```
 `current.md` still contains pending `<!-- INK: -->` author instructions that have not been processed. The book cannot be sealed until they are resolved.
 
-**Run a rework-only session:**
+**This invocation becomes a rework-only session:**
 
 1. Call `session_open` — acquires lock, refreshes git state, returns a fresh payload
 2. Perform §Abort checks as normal
@@ -359,9 +360,9 @@ The book is sealed. Take these final steps in order:
 4. **Do not generate any new continuation prose** — no `<!-- INK:NEW:START/END -->` block
 5. Call `session_close` with only the reworked blocks on stdin, a `--summary` describing what was reworked, and any `--human-edit` flags from the payload
 6. Call `complete` again
-7. Repeat from step 1 until `status: "complete"`
+7. **Stop**, regardless of the response. If still `needs_revision`, the next scheduled invocation will handle the next rework cycle.
 
-Each rework-only session clears a batch of instructions and moves their validated prose to `Full_Book.md`. The loop terminates as soon as `current.md` has no pending instructions.
+Each rework invocation clears a batch of instructions and moves their validated prose to `Full_Book.md`. The cron scheduler drives repetition — never loop within a single invocation.
 
 ---
 
@@ -369,9 +370,10 @@ Each rework-only session clears a batch of instructions and moves their validate
 
 These are hard rules. Do not deviate.
 
-- **One open, one close.** Call `session_open` exactly once at the start. Call `session_close` exactly once when prose is ready. Never call either again in the same session.
+- **One session per invocation.** Call `session_open` exactly once. Call `session_close` exactly once when prose is ready. After `session_close`, stop — do not call `session_open` again under any circumstances. The cron scheduler handles subsequent sessions.
+- **`session_close` is mandatory.** Every `session_open` must be followed by exactly one `session_close`. If generation fails or is incomplete, call `session_close` anyway with whatever prose was produced (even a partial draft). Never leave a session open.
 - **Generate before close.** Do not call `session_close` speculatively or as a mid-session checkpoint. Only call it when the complete prose output is ready.
-- **No retries.** If any tool returns a non-zero exit code or `"status": "error"` in the JSON, stop immediately. Log the error. Do not retry. The next cron trigger handles recovery.
+- **No retries.** If any tool returns a non-zero exit code or `"status": "error"` in the JSON, call `session_close` to release the lock, then stop. Do not retry. The next cron trigger handles recovery.
 - **Complete at most once.** Call `complete` only when both completion conditions are met. Never call it more than once.
 - **Stop after complete.** After a successful `complete` response, perform only the notification and cron-deletion steps. No further tool calls, no additional prose.
 

@@ -22,9 +22,8 @@ fn default_words_per_chapter() -> u32 {
     3000
 }
 
-// current_review_window_words: 0 means no limit
-fn default_current_review_window_words() -> u32 {
-    0
+fn default_context_window_tokens() -> u32 {
+    200_000
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,8 +44,8 @@ pub struct Config {
     pub words_per_page: u32,
     #[serde(default = "default_words_per_chapter")]
     pub words_per_chapter: u32,
-    #[serde(default = "default_current_review_window_words")]
-    pub current_review_window_words: u32,
+    #[serde(default = "default_context_window_tokens")]
+    pub context_window_tokens: u32,
 }
 
 impl Config {
