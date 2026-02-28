@@ -33,10 +33,13 @@ impl InkState {
         }
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read .ink-state.yml at {}", path.display()))?;
-        let state: InkState = serde_yaml::from_str(&content)
-            .with_context(|| "Failed to parse .ink-state.yml")?;
-        anyhow::ensure!(state.current_chapter >= 1,
-            ".ink-state.yml: current_chapter must be >= 1, got {}", state.current_chapter);
+        let state: InkState =
+            serde_yaml::from_str(&content).with_context(|| "Failed to parse .ink-state.yml")?;
+        anyhow::ensure!(
+            state.current_chapter >= 1,
+            ".ink-state.yml: current_chapter must be >= 1, got {}",
+            state.current_chapter
+        );
         Ok(state)
     }
 
@@ -45,8 +48,8 @@ impl InkState {
     pub fn save(&self, repo_path: &Path) -> Result<()> {
         let path = repo_path.join(".ink-state.yml");
         let tmp_path = repo_path.join(".ink-state.yml.tmp");
-        let content = serde_yaml::to_string(self)
-            .with_context(|| "Failed to serialize .ink-state.yml")?;
+        let content =
+            serde_yaml::to_string(self).with_context(|| "Failed to serialize .ink-state.yml")?;
         std::fs::write(&tmp_path, content)
             .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
         std::fs::rename(&tmp_path, &path)

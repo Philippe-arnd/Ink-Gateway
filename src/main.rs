@@ -12,7 +12,11 @@ use std::path::PathBuf;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Parser)]
-#[command(name = "ink-cli", version, about = "Ink Gateway CLI for AI-driven fiction writing sessions")]
+#[command(
+    name = "ink-cli",
+    version,
+    about = "Ink Gateway CLI for AI-driven fiction writing sessions"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -107,17 +111,17 @@ fn main() -> Result<()> {
             let payload = context::session_open(&repo_path)?;
             println!("{}", serde_json::to_string_pretty(&payload)?);
         }
-        Commands::SessionClose { repo_path, summary, human_edits } => {
+        Commands::SessionClose {
+            repo_path,
+            summary,
+            human_edits,
+        } => {
             let mut prose = String::new();
             std::io::stdin()
                 .read_to_string(&mut prose)
                 .context("Failed to read prose from stdin")?;
-            let result = maintenance::close_session(
-                &repo_path,
-                &prose,
-                summary.as_deref(),
-                &human_edits,
-            )?;
+            let result =
+                maintenance::close_session(&repo_path, &prose, summary.as_deref(), &human_edits)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Commands::Complete { repo_path } => {
@@ -130,7 +134,12 @@ fn main() -> Result<()> {
         Commands::Rollback { repo_path } => {
             maintenance::rollback_session(&repo_path)?;
         }
-        Commands::Init { repo_path, title, author, agent } => {
+        Commands::Init {
+            repo_path,
+            title,
+            author,
+            agent,
+        } => {
             let result = init::run_init(&repo_path, &title, &author)?;
             let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
             if is_tty && !agent {

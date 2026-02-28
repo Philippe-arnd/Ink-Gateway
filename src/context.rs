@@ -123,8 +123,7 @@ pub fn read_lock_age(repo: &Path) -> Option<i64> {
 /// Writes .ink-running with current UTC timestamp, commits and pushes.
 pub fn create_lock(repo: &Path) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    std::fs::write(lock_path(repo), &now)
-        .with_context(|| "Failed to write .ink-running")?;
+    std::fs::write(lock_path(repo), &now).with_context(|| "Failed to write .ink-running")?;
 
     git::run_git(repo, &["add", ".ink-running"])
         .with_context(|| "Failed to git add .ink-running")?;
@@ -145,8 +144,7 @@ pub fn create_lock(repo: &Path) -> Result<()> {
 pub fn remove_stale_lock(repo: &Path) -> Result<()> {
     let path = lock_path(repo);
     if path.exists() {
-        std::fs::remove_file(&path)
-            .with_context(|| "Failed to remove stale .ink-running")?;
+        std::fs::remove_file(&path).with_context(|| "Failed to remove stale .ink-running")?;
         warn!("Stale lock removed");
     }
     Ok(())
@@ -154,8 +152,7 @@ pub fn remove_stale_lock(repo: &Path) -> Result<()> {
 
 /// Removes .ink-kill via git rm, commits, and pushes.
 pub fn delete_kill_file(repo: &Path) -> Result<()> {
-    git::run_git(repo, &["rm", "-f", ".ink-kill"])
-        .with_context(|| "Failed to git rm .ink-kill")?;
+    git::run_git(repo, &["rm", "-f", ".ink-kill"]).with_context(|| "Failed to git rm .ink-kill")?;
     git::run_git(repo, &["commit", "-m", "chore: acknowledge kill request"])
         .with_context(|| "Failed to commit kill acknowledgement")?;
     git::run_git(repo, &["push", "origin", "main"])
@@ -169,7 +166,12 @@ pub fn delete_kill_file(repo: &Path) -> Result<()> {
 pub fn load_global_material(repo: &Path, summary_entries: usize) -> Result<Vec<FileContent>> {
     let global_dir = repo.join("Global Material");
     let mut files: Vec<FileContent> = std::fs::read_dir(&global_dir)
-        .with_context(|| format!("Failed to read Global Material/ at {}", global_dir.display()))?
+        .with_context(|| {
+            format!(
+                "Failed to read Global Material/ at {}",
+                global_dir.display()
+            )
+        })?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
         .filter_map(|e| {
@@ -210,7 +212,11 @@ pub fn truncate_summary(text: &str, n: usize) -> String {
         .copied()
         .collect();
 
-    let pool = if substantive.is_empty() { &all } else { &substantive };
+    let pool = if substantive.is_empty() {
+        &all
+    } else {
+        &substantive
+    };
     let start = pool.len().saturating_sub(n);
     pool[start..].join("\n\n")
 }
@@ -244,11 +250,7 @@ fn truncate_to_last_words(text: &str, max_words: u32) -> String {
     paras[start_idx..].join("\n\n")
 }
 
-pub fn load_chapter(
-    repo: &Path,
-    num: u32,
-    human_edits: &[String],
-) -> Result<Option<ChapterInfo>> {
+pub fn load_chapter(repo: &Path, num: u32, human_edits: &[String]) -> Result<Option<ChapterInfo>> {
     let relative = format!("Chapters material/Chapter_{:02}.md", num);
     let path = repo.join(&relative);
 
@@ -259,7 +261,9 @@ pub fn load_chapter(
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read chapter {}", num))?;
 
-    let modified_today = human_edits.iter().any(|f| f.contains(&format!("Chapter_{:02}.md", num)));
+    let modified_today = human_edits
+        .iter()
+        .any(|f| f.contains(&format!("Chapter_{:02}.md", num)));
 
     Ok(Some(ChapterInfo {
         path: relative,
@@ -311,14 +315,17 @@ pub fn load_word_count(repo: &Path, target: u32) -> Result<WordCount> {
         });
     }
 
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| "Failed to read Full_Book.md")?;
+    let content = std::fs::read_to_string(&path).with_context(|| "Failed to read Full_Book.md")?;
 
     // Use the same counter as session-close so both modules always agree.
     let total = crate::maintenance::count_prose_words(&content);
     let remaining = target.saturating_sub(total);
 
-    Ok(WordCount { total, target, remaining })
+    Ok(WordCount {
+        total,
+        target,
+        remaining,
+    })
 }
 
 // ─── Main orchestration ───────────────────────────────────────────────────────
@@ -356,12 +363,19 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
                 current_chapter: 1,
             },
             global_material: vec![],
-            chapters: Chapters { current: None, next: None },
+            chapters: Chapters {
+                current: None,
+                next: None,
+            },
             current_review: CurrentReview {
                 content: String::new(),
                 instructions: vec![],
             },
-            word_count: WordCount { total: 0, target: 0, remaining: 0 },
+            word_count: WordCount {
+                total: 0,
+                target: 0,
+                remaining: 0,
+            },
             chapter_close_suggested: false,
             current_chapter_word_count: 0,
         });
@@ -430,12 +444,19 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
                 human_edits,
                 config: ConfigSnapshot::new(&config, state.current_chapter),
                 global_material: vec![],
-                chapters: Chapters { current: None, next: None },
+                chapters: Chapters {
+                    current: None,
+                    next: None,
+                },
                 current_review: CurrentReview {
                     content: String::new(),
                     instructions: vec![],
                 },
-                word_count: WordCount { total: 0, target: config.target_length, remaining: 0 },
+                word_count: WordCount {
+                    total: 0,
+                    target: config.target_length,
+                    remaining: 0,
+                },
                 chapter_close_suggested: false,
                 current_chapter_word_count: state.current_chapter_word_count,
             });
@@ -466,7 +487,10 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
     // 13. Load next chapter only when chapter close is approaching — avoids sending
     //     the outline tokens every session when not near a chapter boundary.
     let next_chapter = if chapter_close_suggested {
-        info!("Step 13: chapter close suggested — loading next chapter {}", state.current_chapter + 1);
+        info!(
+            "Step 13: chapter close suggested — loading next chapter {}",
+            state.current_chapter + 1
+        );
         load_chapter(repo, state.current_chapter + 1, &human_edits)?
     } else {
         info!("Step 13: chapter close not suggested — skipping next chapter load");
@@ -477,8 +501,7 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
     info!("Step 14: loading current review");
     let review_path = repo.join("Review").join("current.md");
     let raw_review = if review_path.exists() {
-        std::fs::read_to_string(&review_path)
-            .with_context(|| "Failed to read Review/current.md")?
+        std::fs::read_to_string(&review_path).with_context(|| "Failed to read Review/current.md")?
     } else {
         String::new()
     };

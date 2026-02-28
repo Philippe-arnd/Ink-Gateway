@@ -43,7 +43,12 @@ struct RpcError {
 
 impl RpcResponse {
     fn ok(id: Value, result: Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     fn err(id: Value, code: i32, message: impl Into<String>) -> Self {
@@ -51,7 +56,10 @@ impl RpcResponse {
             jsonrpc: "2.0",
             id,
             result: None,
-            error: Some(RpcError { code, message: message.into() }),
+            error: Some(RpcError {
+                code,
+                message: message.into(),
+            }),
         }
     }
 }
@@ -236,7 +244,11 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
             let human_edits: Vec<String> = args
                 .get("human_edits")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
 
             let payload = maintenance::close_session(&repo_path, prose, summary, &human_edits)
@@ -249,10 +261,15 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
         "advance_chapter" => maintenance::advance_chapter(&repo_path).map_err(|e| e.to_string()),
 
         "init" => {
-            let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled");
-            let author = args.get("author").and_then(|v| v.as_str()).unwrap_or("Unknown");
-            let payload =
-                init::run_init(&repo_path, title, author).map_err(|e| e.to_string())?;
+            let title = args
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Untitled");
+            let author = args
+                .get("author")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown");
+            let payload = init::run_init(&repo_path, title, author).map_err(|e| e.to_string())?;
             serde_json::to_value(payload).map_err(|e| e.to_string())
         }
 
@@ -303,7 +320,11 @@ fn main() {
         let req: RpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
-                send(&RpcResponse::err(Value::Null, -32700, format!("Parse error: {e}")));
+                send(&RpcResponse::err(
+                    Value::Null,
+                    -32700,
+                    format!("Parse error: {e}"),
+                ));
                 continue;
             }
         };

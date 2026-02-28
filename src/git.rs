@@ -23,12 +23,10 @@ pub fn run_git(repo: &Path, args: &[&str]) -> Result<String> {
 /// `merge_ff_origin_main` separately after human edits are committed.
 pub fn preflight_fetch_and_checkout(repo: &Path) -> Result<()> {
     info!("Fetching origin...");
-    run_git(repo, &["fetch", "origin"])
-        .with_context(|| "Failed to fetch from origin")?;
+    run_git(repo, &["fetch", "origin"]).with_context(|| "Failed to fetch from origin")?;
 
     info!("Checking out main...");
-    run_git(repo, &["checkout", "main"])
-        .with_context(|| "Failed to checkout main")?;
+    run_git(repo, &["checkout", "main"]).with_context(|| "Failed to checkout main")?;
 
     Ok(())
 }
@@ -80,8 +78,7 @@ pub fn commit_human_edits(repo: &Path, files: &[String]) -> Result<()> {
 
     info!("Committing {} human-edited file(s)...", files.len());
 
-    run_git(repo, &["add", "."])
-        .with_context(|| "Failed to git add")?;
+    run_git(repo, &["add", "."]).with_context(|| "Failed to git add")?;
 
     run_git(repo, &["commit", "-m", "chore: human updates"])
         .with_context(|| "Failed to commit human edits")?;
@@ -129,8 +126,7 @@ pub fn setup_draft_branch(repo: &Path) -> Result<()> {
     }
 
     info!("Rebasing draft onto main...");
-    run_git(repo, &["rebase", "main"])
-        .with_context(|| "Failed to rebase draft onto main")?;
+    run_git(repo, &["rebase", "main"]).with_context(|| "Failed to rebase draft onto main")?;
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use inquire::{Confirm, Select, Text};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -138,7 +138,9 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
     // Guard: already initialized
     let config_path = repo_path.join("Global Material/Config.yml");
     if config_path.exists() {
-        return Err(anyhow!("repository already initialized — Global Material/Config.yml exists"));
+        return Err(anyhow!(
+            "repository already initialized — Global Material/Config.yml exists"
+        ));
     }
 
     let mut files_created: Vec<String> = Vec::new();
@@ -161,14 +163,42 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
         Ok(())
     };
 
-    write_file("Global Material/Config.yml", &fill(CONFIG_YML, title, author), &mut files_created)?;
-    write_file("Global Material/Soul.md", &fill(SOUL_MD, title, author), &mut files_created)?;
-    write_file("Global Material/Outline.md", &fill(OUTLINE_MD, title, author), &mut files_created)?;
-    write_file("Global Material/Characters.md", &fill(CHARACTERS_MD, title, author), &mut files_created)?;
-    write_file("Global Material/Lore.md", &fill(LORE_MD, title, author), &mut files_created)?;
+    write_file(
+        "Global Material/Config.yml",
+        &fill(CONFIG_YML, title, author),
+        &mut files_created,
+    )?;
+    write_file(
+        "Global Material/Soul.md",
+        &fill(SOUL_MD, title, author),
+        &mut files_created,
+    )?;
+    write_file(
+        "Global Material/Outline.md",
+        &fill(OUTLINE_MD, title, author),
+        &mut files_created,
+    )?;
+    write_file(
+        "Global Material/Characters.md",
+        &fill(CHARACTERS_MD, title, author),
+        &mut files_created,
+    )?;
+    write_file(
+        "Global Material/Lore.md",
+        &fill(LORE_MD, title, author),
+        &mut files_created,
+    )?;
     write_file("Global Material/Summary.md", "", &mut files_created)?;
-    write_file("Chapters material/Chapter_01.md", &fill(CHAPTER_01_MD, title, author), &mut files_created)?;
-    write_file("Review/current.md", &fill(CURRENT_MD, title, author), &mut files_created)?;
+    write_file(
+        "Chapters material/Chapter_01.md",
+        &fill(CHAPTER_01_MD, title, author),
+        &mut files_created,
+    )?;
+    write_file(
+        "Review/current.md",
+        &fill(CURRENT_MD, title, author),
+        &mut files_created,
+    )?;
     write_file("AGENTS.md", AGENTS_MD, &mut files_created)?;
     write_file("Changelog/.gitkeep", "", &mut files_created)?;
     write_file(
@@ -300,8 +330,7 @@ pub fn run_seed(repo_path: &Path) -> Result<SeedPayload> {
 
     for name in &["CLAUDE.md", "GEMINI.md"] {
         let path = repo_path.join(name);
-        fs::write(&path, SEED_CONTENT)
-            .with_context(|| format!("Failed to write {}", name))?;
+        fs::write(&path, SEED_CONTENT).with_context(|| format!("Failed to write {}", name))?;
         files_created.push(name.to_string());
     }
 
@@ -317,7 +346,11 @@ pub fn run_seed(repo_path: &Path) -> Result<SeedPayload> {
     };
 
     run(&["add", "CLAUDE.md", "GEMINI.md"])?;
-    run(&["commit", "-m", "chore: add agent bootstrap files (CLAUDE.md, GEMINI.md)"])?;
+    run(&[
+        "commit",
+        "-m",
+        "chore: add agent bootstrap files (CLAUDE.md, GEMINI.md)",
+    ])?;
 
     let push = Command::new("git")
         .args(["push", "origin", "main"])
@@ -348,7 +381,10 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
         .to_string();
 
     println!();
-    println!("  ⚠  Reset will permanently delete all book content in «{}».", repo_name);
+    println!(
+        "  ⚠  Reset will permanently delete all book content in «{}».",
+        repo_name
+    );
     println!("  The git history is preserved, but all files will be removed.");
     println!("  You can re-run `ink-cli init` afterwards to start fresh.");
     println!();
@@ -368,7 +404,9 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
     // --ignore-unmatch silences errors for files that don't exist.
     let _ = Command::new("git")
         .args([
-            "rm", "-rf", "--ignore-unmatch",
+            "rm",
+            "-rf",
+            "--ignore-unmatch",
             "Global Material/",
             "Chapters material/",
             "Review/",
@@ -384,7 +422,12 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
         .status();
 
     // Re-create .gitkeep placeholders so the directories exist for the next init
-    for dir in &["Changelog", "Chapters material", "Review", "Current version"] {
+    for dir in &[
+        "Changelog",
+        "Chapters material",
+        "Review",
+        "Current version",
+    ] {
         let dir_path = repo_path.join(dir);
         fs::create_dir_all(&dir_path)?;
         fs::write(dir_path.join(".gitkeep"), "")?;
@@ -402,7 +445,11 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
     };
 
     run(&["add", "-A"])?;
-    run(&["commit", "-m", "reset: wipe book content for re-initialization"])?;
+    run(&[
+        "commit",
+        "-m",
+        "reset: wipe book content for re-initialization",
+    ])?;
 
     let push = Command::new("git")
         .args(["push", "origin", "main"])
@@ -440,7 +487,9 @@ fn git_commit_and_push(repo_path: &Path) -> Result<()> {
         .status()?;
 
     if !push_status.success() {
-        tracing::warn!("git push origin main failed — no remote configured or push rejected; skipping");
+        tracing::warn!(
+            "git push origin main failed — no remote configured or push rejected; skipping"
+        );
     }
 
     Ok(())
@@ -476,7 +525,11 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
             if i > 0 {
                 println!();
             }
-            println!("  ── {} {}", name, "─".repeat(48_usize.saturating_sub(name.len())));
+            println!(
+                "  ── {} {}",
+                name,
+                "─".repeat(48_usize.saturating_sub(name.len()))
+            );
         }
 
         let answer = if let Some(ref options) = q.options {
@@ -492,11 +545,17 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
             }
         } else if i == 2 || i == 3 {
             // Text with a computed default based on book type (Q1)
-            let book_type = answers.iter().find(|(idx, _)| *idx == 1)
+            let book_type = answers
+                .iter()
+                .find(|(idx, _)| *idx == 1)
                 .map(|(_, a)| a.as_str())
                 .unwrap_or("Novel");
             let (default_pages, default_session) = suggested_defaults(book_type);
-            let default_val = if i == 2 { default_pages } else { default_session };
+            let default_val = if i == 2 {
+                default_pages
+            } else {
+                default_session
+            };
             let default_str = default_val.to_string();
             let words = default_val * 250;
             let dynamic_hint = if i == 2 {
@@ -518,10 +577,7 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
                 Err(e) => anyhow::bail!("Input error on question {}: {}", i + 1, e),
             }
         } else {
-            match Text::new(q.question)
-                .with_help_message(q.hint)
-                .prompt()
-            {
+            match Text::new(q.question).with_help_message(q.hint).prompt() {
                 Ok(a) => a,
                 Err(inquire::InquireError::OperationCanceled)
                 | Err(inquire::InquireError::OperationInterrupted) => {
@@ -540,22 +596,32 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
     println!("  ── Review ───────────────────────────────────────────────────────");
     for (i, answer) in &answers {
         let q = &payload.questions[*i];
-        let display = if answer.trim().is_empty() { "(skipped)" } else { answer.trim() };
+        let display = if answer.trim().is_empty() {
+            "(skipped)"
+        } else {
+            answer.trim()
+        };
         println!("  {}. {}:", i + 1, q.question);
         println!("     {}", display);
     }
     // Show derived Config.yml values
-    let target_pages = answers.iter().find(|(i, _)| *i == 2)
+    let target_pages = answers
+        .iter()
+        .find(|(i, _)| *i == 2)
         .and_then(|(_, a)| a.trim().parse::<u32>().ok());
-    let session_pages = answers.iter().find(|(i, _)| *i == 3)
+    let session_pages = answers
+        .iter()
+        .find(|(i, _)| *i == 3)
         .and_then(|(_, a)| a.trim().parse::<u32>().ok());
     if let (Some(tp), Some(sp)) = (target_pages, session_pages) {
         let target_words = tp * 250;
         let session_words = sp * 250;
         let chapters = ((target_words + 2999) / 3000).max(1);
         println!();
-        println!("  Config: {} pages → {} words, {} chapters, {} words/session",
-            tp, target_words, chapters, session_words);
+        println!(
+            "  Config: {} pages → {} words, {} chapters, {} words/session",
+            tp, target_words, chapters, session_words
+        );
     }
     println!();
 
@@ -592,19 +658,21 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
 /// to their respective target files. Multiple answers targeting the same file
 /// are combined under section headings.
 fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Result<()> {
-    let map: HashMap<usize, &str> = answers
-        .iter()
-        .map(|(i, a)| (*i, a.as_str()))
-        .collect();
+    let map: HashMap<usize, &str> = answers.iter().map(|(i, a)| (*i, a.as_str())).collect();
 
     // Config.yml — language (q0), target pages (q2), session pages (q3); chapter_count derived
     {
         let path = repo_path.join("Global Material/Config.yml");
-        let content = fs::read_to_string(&path)
-            .with_context(|| "Failed to read Config.yml")?;
+        let content = fs::read_to_string(&path).with_context(|| "Failed to read Config.yml")?;
         let lang = map.get(&0).copied().unwrap_or("").trim().to_string();
-        let target_pages = map.get(&2).and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0);
-        let session_pages = map.get(&3).and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0);
+        let target_pages = map
+            .get(&2)
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .unwrap_or(0);
+        let session_pages = map
+            .get(&3)
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .unwrap_or(0);
         let target_words = target_pages * 250;
         let session_words = session_pages * 250;
         let chapter_count = ((target_words + 2999) / 3000).max(1);
@@ -625,8 +693,7 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
             })
             .collect::<Vec<_>>()
             .join("\n");
-        fs::write(&path, format!("{}\n", updated))
-            .with_context(|| "Failed to write Config.yml")?;
+        fs::write(&path, format!("{}\n", updated)).with_context(|| "Failed to write Config.yml")?;
     }
 
     // Soul.md — genre/tone (q4) + narrator/perspective (q5)
@@ -734,7 +801,11 @@ fn commit_qa_answers(repo_path: &Path) -> Result<()> {
     };
 
     run(&["add", "-A"])?;
-    run(&["commit", "-m", "init: populate global material from author Q&A"])?;
+    run(&[
+        "commit",
+        "-m",
+        "init: populate global material from author Q&A",
+    ])?;
 
     let push = Command::new("git")
         .args(["push", "origin", "main"])
@@ -763,8 +834,7 @@ pub fn update_agents(repo_path: &Path) -> Result<serde_json::Value> {
     for name in &["CLAUDE.md", "GEMINI.md"] {
         let path = repo_path.join(name);
         if path.exists() {
-            fs::write(&path, SEED_CONTENT)
-                .with_context(|| format!("Failed to write {name}"))?;
+            fs::write(&path, SEED_CONTENT).with_context(|| format!("Failed to write {name}"))?;
             files_updated.push(name.to_string());
         }
     }
@@ -773,7 +843,10 @@ pub fn update_agents(repo_path: &Path) -> Result<serde_json::Value> {
     let mut args = vec!["add"];
     let file_refs: Vec<&str> = files_updated.iter().map(String::as_str).collect();
     args.extend_from_slice(&file_refs);
-    let status = Command::new("git").args(&args).current_dir(repo_path).status()?;
+    let status = Command::new("git")
+        .args(&args)
+        .current_dir(repo_path)
+        .status()?;
     if !status.success() {
         anyhow::bail!("git add failed");
     }
@@ -792,7 +865,11 @@ pub fn update_agents(repo_path: &Path) -> Result<serde_json::Value> {
     }
 
     let commit = Command::new("git")
-        .args(["commit", "-m", "chore: update agent files to latest ink-gateway version"])
+        .args([
+            "commit",
+            "-m",
+            "chore: update agent files to latest ink-gateway version",
+        ])
         .current_dir(repo_path)
         .status()?;
     if !commit.success() {
