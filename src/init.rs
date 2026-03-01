@@ -194,7 +194,11 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
         &mut files_created,
     )?;
     write_file("AGENTS.md", AGENTS_MD, &mut files_created)?;
-    write_file("README.md", &fill(README_MD, title, author), &mut files_created)?;
+    write_file(
+        "README.md",
+        &fill(README_MD, title, author),
+        &mut files_created,
+    )?;
     write_file("Changelog/.gitkeep", "", &mut files_created)?;
     write_file(
         "Current version/Full_Book.md",
@@ -782,8 +786,8 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
                 .unwrap_or(0);
             if !lang.is_empty() || target_pages > 0 {
                 let target_words = target_pages * 250;
-                let content = fs::read_to_string(&readme_path)
-                    .with_context(|| "Failed to read README.md")?;
+                let content =
+                    fs::read_to_string(&readme_path).with_context(|| "Failed to read README.md")?;
                 let updated = content
                     .lines()
                     .map(|line| {
@@ -798,8 +802,7 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                fs::write(&readme_path, updated)
-                    .with_context(|| "Failed to write README.md")?;
+                fs::write(&readme_path, updated).with_context(|| "Failed to write README.md")?;
             }
         }
     }

@@ -551,7 +551,11 @@ pub fn complete_session(repo: &Path) -> Result<serde_json::Value> {
 
     // Update README: mark all chapters ✓ and set final status
     let state = InkState::load(repo).unwrap_or_default();
-    let chapter_word = if state.current_chapter == 1 { "chapter" } else { "chapters" };
+    let chapter_word = if state.current_chapter == 1 {
+        "chapter"
+    } else {
+        "chapters"
+    };
     let _ = update_readme_chapters(repo, state.current_chapter, None);
     let _ = update_readme_status(
         repo,
@@ -643,8 +647,7 @@ pub fn advance_chapter(repo: &Path) -> Result<serde_json::Value> {
     if readme_exists {
         add_args.push("README.md");
     }
-    git::run_git(repo, &add_args)
-        .with_context(|| "Failed to git add for chapter advance")?;
+    git::run_git(repo, &add_args).with_context(|| "Failed to git add for chapter advance")?;
     git::run_git(
         repo,
         &[
