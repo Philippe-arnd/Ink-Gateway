@@ -176,6 +176,111 @@ fn append_to_full_book(book_path: &Path, content: &str, words_per_page: u32) -> 
     Ok((old_words, new_words))
 }
 
+// ─── README helpers ────────────────────────────────────────────────────────────
+
+/// Extract the first Markdown heading from `content` as a plain string.
+/// Falls back to "Chapter N" if no heading is found.
+fn extract_chapter_title(content: &str, chapter_num: u32) -> String {
+    content
+        .lines()
+        .find_map(|line| {
+            let stripped = line.trim_start_matches('#').trim();
+            if line.starts_with('#') && !stripped.is_empty() {
+                Some(stripped.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| format!("Chapter {}", chapter_num))
+}
+
+/// Rebuild the chapter list section in README.md.
+///
+/// Chapters 1..=`completed_through` are marked ✓.
+/// `in_progress` (if Some) is marked *(in progress)*.
+/// Chapters beyond `in_progress` (or `completed_through` when None) are not listed.
+///
+/// The section is delimited by the `<!-- INK:README:CHAPTERS -->` marker and the
+/// next `\n---` separator. Non-fatal if README.md is absent or the marker is missing.
+fn update_readme_chapters(
+    repo: &Path,
+    completed_through: u32,
+    in_progress: Option<u32>,
+) -> Result<()> {
+    let readme_path = repo.join("README.md");
+    if !readme_path.exists() {
+        return Ok(());
+    }
+
+    const MARKER: &str = "<!-- INK:README:CHAPTERS -->";
+    let content =
+        std::fs::read_to_string(&readme_path).with_context(|| "Failed to read README.md")?;
+
+    let Some(marker_pos) = content.find(MARKER) else {
+        return Ok(());
+    };
+
+    // Build the chapter list
+    let last = in_progress.unwrap_or(completed_through);
+    let mut list = String::new();
+    for i in 1..=last {
+        let chapter_path = repo
+            .join("Chapters material")
+            .join(format!("Chapter_{:02}.md", i));
+        let title = if chapter_path.exists() {
+            let ch = std::fs::read_to_string(&chapter_path).unwrap_or_default();
+            extract_chapter_title(&ch, i)
+        } else {
+            format!("Chapter {}", i)
+        };
+        let suffix = if Some(i) == in_progress {
+            " *(in progress)*"
+        } else {
+            " ✓"
+        };
+        list.push_str(&format!("{}. **{}**{}\n", i, title, suffix));
+    }
+
+    // Replace from the marker line to the next \n--- separator (kept intact)
+    let after_marker = &content[marker_pos + MARKER.len()..];
+    let sep_offset = after_marker.find("\n---").unwrap_or(after_marker.len());
+
+    let new_content = format!(
+        "{}{}\n\n{}{}",
+        &content[..marker_pos],
+        MARKER,
+        list,
+        &after_marker[sep_offset..]
+    );
+
+    std::fs::write(&readme_path, new_content).with_context(|| "Failed to write README.md")?;
+    Ok(())
+}
+
+/// Update the `- **Status:**` line in README.md to `new_status`.
+/// Non-fatal if README.md is absent.
+fn update_readme_status(repo: &Path, new_status: &str) -> Result<()> {
+    let readme_path = repo.join("README.md");
+    if !readme_path.exists() {
+        return Ok(());
+    }
+    let content =
+        std::fs::read_to_string(&readme_path).with_context(|| "Failed to read README.md")?;
+    let updated = content
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("- **Status:**") {
+                format!("- **Status:** {}", new_status)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&readme_path, updated).with_context(|| "Failed to write README.md")?;
+    Ok(())
+}
+
 // ─── session-close ─────────────────────────────────────────────────────────────
 
 pub fn close_session(
@@ -444,6 +549,18 @@ pub fn complete_session(repo: &Path) -> Result<serde_json::Value> {
     info!("Writing COMPLETE marker");
     std::fs::write(&complete_path, "").with_context(|| "Failed to write COMPLETE")?;
 
+    // Update README: mark all chapters ✓ and set final status
+    let state = InkState::load(repo).unwrap_or_default();
+    let chapter_word = if state.current_chapter == 1 { "chapter" } else { "chapters" };
+    let _ = update_readme_chapters(repo, state.current_chapter, None);
+    let _ = update_readme_status(
+        repo,
+        &format!(
+            "Complete — {} {}, {} words",
+            state.current_chapter, chapter_word, total_word_count
+        ),
+    );
+
     // Commit and push main + draft so both branches reflect the sealed book
     git::run_git(repo, &["add", "-A"]).with_context(|| "Failed to git add for final seal")?;
     git::run_git(repo, &["commit", "-m", "book: complete — final seal"])
@@ -485,6 +602,17 @@ pub fn advance_chapter(repo: &Path) -> Result<serde_json::Value> {
         }));
     }
 
+    // Guard: chapter must have reached ≥ 90 % of words_per_chapter
+    let min_words = (config.words_per_chapter as f64 * 0.9) as u32;
+    if state.current_chapter_word_count < min_words {
+        return Ok(serde_json::json!({
+            "status": "chapter_not_ready",
+            "current_word_count": state.current_chapter_word_count,
+            "target_word_count": config.words_per_chapter,
+            "min_words_to_advance": min_words,
+        }));
+    }
+
     let chapter_filename = format!("Chapter_{:02}.md", next_chapter);
     let chapter_rel = format!("Chapters material/{}", chapter_filename);
     let chapter_path = repo.join(&chapter_rel);
@@ -505,8 +633,17 @@ pub fn advance_chapter(repo: &Path) -> Result<serde_json::Value> {
     state.current_chapter_word_count = 0;
     state.save(repo)?;
 
-    // Commit the state update (and chapter file in case it was just created)
-    git::run_git(repo, &["add", ".ink-state.yml", &chapter_rel])
+    // Update README: mark previous chapter ✓, new chapter in progress
+    update_readme_chapters(repo, next_chapter - 1, Some(next_chapter))?;
+    update_readme_status(repo, &format!("In progress — Chapter {}", next_chapter))?;
+
+    // Commit the state update (and chapter file + README if present)
+    let readme_exists = repo.join("README.md").exists();
+    let mut add_args = vec!["add", ".ink-state.yml", &chapter_rel];
+    if readme_exists {
+        add_args.push("README.md");
+    }
+    git::run_git(repo, &add_args)
         .with_context(|| "Failed to git add for chapter advance")?;
     git::run_git(
         repo,
@@ -913,5 +1050,70 @@ mod tests {
         std::fs::write(tmp.path().join("COMPLETE"), "").unwrap();
         let err = complete_session(tmp.path()).unwrap_err();
         assert!(err.to_string().contains("already complete"));
+    }
+
+    // ── advance-chapter guard helpers ─────────────────────────────────────────
+
+    fn write_test_config(dir: &std::path::Path, words_per_chapter: u32) {
+        let global_dir = dir.join("Global Material");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        let content = format!(
+            "target_length: 80000\nchapter_count: 10\nchapter_structure: three-act\n\
+             words_per_session: 800\nwords_per_chapter: {}\n",
+            words_per_chapter
+        );
+        std::fs::write(global_dir.join("Config.yml"), content).unwrap();
+    }
+
+    fn write_test_state(dir: &std::path::Path, chapter: u32, word_count: u32) {
+        let content = format!(
+            "current_chapter: {}\ncurrent_chapter_word_count: {}\n",
+            chapter, word_count
+        );
+        std::fs::write(dir.join(".ink-state.yml"), content).unwrap();
+    }
+
+    // ── advance-chapter guard tests ───────────────────────────────────────────
+
+    #[test]
+    fn advance_chapter_not_ready_below_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_config(tmp.path(), 3000);
+        write_test_state(tmp.path(), 1, 100);
+
+        let result = advance_chapter(tmp.path()).unwrap();
+        assert_eq!(result["status"], "chapter_not_ready");
+        assert_eq!(result["current_word_count"], 100);
+        assert_eq!(result["target_word_count"], 3000);
+        assert_eq!(result["min_words_to_advance"], 2700);
+    }
+
+    #[test]
+    fn advance_chapter_not_ready_at_zero_words() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_config(tmp.path(), 3000);
+        write_test_state(tmp.path(), 1, 0);
+
+        let result = advance_chapter(tmp.path()).unwrap();
+        assert_eq!(result["status"], "chapter_not_ready");
+        assert_eq!(result["current_word_count"], 0);
+    }
+
+    // ── chapter_close_suggested formula tests (pure arithmetic, no I/O) ──────
+
+    #[test]
+    fn chapter_close_threshold_true_at_90_pct() {
+        let words_per_chapter: u32 = 3000;
+        let min: u32 = (words_per_chapter as f64 * 0.9) as u32; // 2700
+        let current_word_count: u32 = 2700;
+        assert!(current_word_count >= min);
+    }
+
+    #[test]
+    fn chapter_close_threshold_false_below_90_pct() {
+        let words_per_chapter: u32 = 3000;
+        let min: u32 = (words_per_chapter as f64 * 0.9) as u32; // 2700
+        let current_word_count: u32 = 2699;
+        assert!(current_word_count < min);
     }
 }

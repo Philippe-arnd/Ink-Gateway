@@ -54,7 +54,9 @@ Derive `--author` from the GitHub URL, repository metadata, or ask the user if u
 
 The command outputs JSON with a `questions` array. Each entry has `question`, `hint`, and `target_file`.
 
-**Ask the author each question in order.** Once you have all 13 answers, extrapolate each brief answer into rich, detailed content, then write the files directly:
+**Ask the author each question in order.** Once you have all 13 answers, extrapolate each brief answer into rich, detailed content, then fill in the template files.
+
+`ink-cli init` already wrote every file with its full template structure. **Read each file first, then replace the `[...]` placeholder sections with actual content derived from the author's answers.** Do not add, remove, or rename any section heading — preserve the existing structure exactly.
 
 Questions 1–4 populate `Config.yml`:
 - Q1: language → `language:` field
@@ -62,24 +64,15 @@ Questions 1–4 populate `Config.yml`:
 - Q3: target pages → `target_length: <pages × 250>`; also compute `chapter_count: <ceil(target_words / 3000)>`
 - Q4: pages per session → `words_per_session: <pages × 250>`
 
-| File | What to write |
+| File | What content to place inside the `[...]` placeholders |
 |---|---|
-| `Global Material/Config.yml` | Update `language:`, `target_length:`, `words_per_session:`, and `chapter_count:` fields. Do not overwrite other fields. |
-| `Global Material/Soul.md` | Full style guide (2–4 paragraphs): narrator voice, sentence rhythm, vocabulary level, emotional register, what to avoid. |
-| `Global Material/Characters.md` | Full character sheet per character: appearance hints, personality, motivation, internal conflict, key relationships, arc across the book. |
-| `Global Material/Outline.md` | Structured plot outline: opening act, rising tension, midpoint reversal, dark night of the soul, climax, resolution, central stakes, thematic undercurrent. |
-| `Global Material/Lore.md` | World-building reference: setting atmosphere, history, social structures, world rules, sensory details the prose should reflect. |
-| `Chapters material/Chapter_01.md` | Detailed scene beats for Chapter 1: what happens, in what order, what the reader should feel, what is established, what is withheld. |
-
-Use this markdown structure:
-
-```
-Soul.md          →  # Soul\\n\\n## Genre & Tone\\n\\n...\\n\\n## Narrator & Perspective\\n\\n...\\n
-Characters.md    →  # Characters\\n\\n## Protagonist\\n\\n...\\n\\n## Antagonist / Obstacle\\n\\n...\\n
-Outline.md       →  # Outline\\n\\n## Opening\\n\\n...\\n\\n## Midpoint\\n\\n...\\n\\n## Ending\\n\\n...\\n
-Lore.md          →  # Lore\\n\\n## Setting\\n\\n...\\n
-Chapter_01.md    →  # Chapter 1\\n\\n## Beats\\n\\n...\\n
-```
+| `Global Material/Config.yml` | Update `language:`, `target_length:`, `words_per_session:`, and `chapter_count:` fields only. Do not overwrite other fields. |
+| `Global Material/Soul.md` | Narrator voice, tone, prose style, example sentences, reference authors — extrapolated from Q5 and Q6. Fill every placeholder section. |
+| `Global Material/Characters.md` | For each character: name, appearance, want, need, voice (with sample line), arc, notes — extrapolated from Q7 and Q8. Fill every field row. |
+| `Global Material/Outline.md` | Premise, central question, act structure, chapter breakdown — extrapolated from Q9, Q10, Q11. Fill every placeholder section. |
+| `Global Material/Lore.md` | Setting description, world rules, history, glossary — extrapolated from Q12. Fill every placeholder section. |
+| `Chapters material/Chapter_01.md` | Scene beats, pacing, emotional arc — extrapolated from Q13. Fill every placeholder section. |
+| `README.md` | Fill in the tagline (blockquote), the short description paragraph, the Synopsis section, and the Details fields (Genre, Format with approximate word count, Language). **Do not change the Status line or the Chapters section** — they are managed automatically by ink-cli. |
 
 Then commit and push:
 
@@ -100,6 +93,7 @@ const LORE_MD: &str = include_str!("../templates/Lore.md");
 const CHAPTER_01_MD: &str = include_str!("../templates/Chapter_01.md");
 const CURRENT_MD: &str = include_str!("../templates/current.md");
 const AGENTS_MD: &str = include_str!("../templates/AGENTS.md");
+const README_MD: &str = include_str!("../templates/README.md");
 
 #[derive(Serialize)]
 pub struct Question {
@@ -200,6 +194,7 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
         &mut files_created,
     )?;
     write_file("AGENTS.md", AGENTS_MD, &mut files_created)?;
+    write_file("README.md", &fill(README_MD, title, author), &mut files_created)?;
     write_file("Changelog/.gitkeep", "", &mut files_created)?;
     write_file(
         "Current version/Full_Book.md",
@@ -772,6 +767,40 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
             let content = format!("# Lore\n\n## Setting\n\n{}\n", setting);
             fs::write(repo_path.join("Global Material/Lore.md"), content)
                 .with_context(|| "Failed to write Lore.md")?;
+        }
+    }
+
+    // README.md — update language, format, and target words from config answers
+    {
+        let readme_path = repo_path.join("README.md");
+        if readme_path.exists() {
+            let lang = map.get(&0).copied().unwrap_or("").trim().to_string();
+            let book_type = map.get(&1).copied().unwrap_or("Novel");
+            let target_pages = map
+                .get(&2)
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(0);
+            if !lang.is_empty() || target_pages > 0 {
+                let target_words = target_pages * 250;
+                let content = fs::read_to_string(&readme_path)
+                    .with_context(|| "Failed to read README.md")?;
+                let updated = content
+                    .lines()
+                    .map(|line| {
+                        if line.trim_start().starts_with("- **Language:**") && !lang.is_empty() {
+                            format!("- **Language:** {}", lang)
+                        } else if line.trim_start().starts_with("- **Format:**") && target_pages > 0
+                        {
+                            format!("- **Format:** {} (~{} words)", book_type, target_words)
+                        } else {
+                            line.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                fs::write(&readme_path, updated)
+                    .with_context(|| "Failed to write README.md")?;
+            }
         }
     }
 

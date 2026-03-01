@@ -74,6 +74,7 @@ pub struct SessionPayload {
     pub word_count: WordCount,
     pub chapter_close_suggested: bool,
     pub current_chapter_word_count: u32,
+    pub chapter_progress_pct: u8,
 }
 
 #[derive(Debug, Serialize)]
@@ -378,6 +379,7 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
             },
             chapter_close_suggested: false,
             current_chapter_word_count: 0,
+            chapter_progress_pct: 0,
         });
     }
 
@@ -459,6 +461,7 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
                 },
                 chapter_close_suggested: false,
                 current_chapter_word_count: state.current_chapter_word_count,
+                chapter_progress_pct: 0,
             });
         }
         Some(age) => {
@@ -535,6 +538,13 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
     let word_count = load_word_count(repo, config.target_length)?;
 
     // 16. Build payload
+    let chapter_progress_pct = state
+        .current_chapter_word_count
+        .saturating_mul(100)
+        .checked_div(config.words_per_chapter)
+        .unwrap_or(0)
+        .min(100) as u8;
+
     Ok(SessionPayload {
         session_already_run: false,
         kill_requested: false,
@@ -554,5 +564,6 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
         word_count,
         chapter_close_suggested,
         current_chapter_word_count: state.current_chapter_word_count,
+        chapter_progress_pct,
     })
 }
