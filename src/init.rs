@@ -6,6 +6,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use crate::git;
+
 // ─── Seed content ─────────────────────────────────────────────────────────────
 
 /// Written to CLAUDE.md and GEMINI.md by `ink-cli seed`.
@@ -333,30 +335,28 @@ pub fn run_seed(repo_path: &Path) -> Result<SeedPayload> {
         files_created.push(name.to_string());
     }
 
-    let run = |args: &[&str]| -> Result<()> {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(repo_path)
-            .status()?;
-        if !status.success() {
-            anyhow::bail!("git {} failed", args.join(" "));
-        }
-        Ok(())
-    };
+    git::run_git(repo_path, &["add", "CLAUDE.md", "GEMINI.md"])?;
 
-    run(&["add", "CLAUDE.md", "GEMINI.md"])?;
-    run(&[
-        "commit",
-        "-m",
-        "chore: add agent bootstrap files (CLAUDE.md, GEMINI.md)",
-    ])?;
+    // Only commit if there are staged changes (idempotent re-runs)
+    let nothing_staged = git::run_git(repo_path, &["diff", "--cached", "--quiet"]).is_ok();
+    if nothing_staged {
+        return Ok(SeedPayload {
+            status: "up_to_date",
+            files_created,
+        });
+    }
 
-    let push = Command::new("git")
-        .args(["push", "origin", "main"])
-        .current_dir(repo_path)
-        .status()?;
-    if !push.success() {
-        tracing::warn!("git push skipped — no remote configured");
+    git::run_git(
+        repo_path,
+        &[
+            "commit",
+            "-m",
+            "chore: add agent bootstrap files (CLAUDE.md, GEMINI.md)",
+        ],
+    )?;
+
+    if let Err(e) = git::run_git(repo_path, &["push", "origin", "main"]) {
+        tracing::warn!("git push skipped: {}", e);
     }
 
     Ok(SeedPayload {
@@ -401,8 +401,9 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
 
     // Remove all tracked content directories and files in one git rm call.
     // --ignore-unmatch silences errors for files that don't exist.
-    let _ = Command::new("git")
-        .args([
+    git::run_git(
+        repo_path,
+        &[
             "rm",
             "-rf",
             "--ignore-unmatch",
@@ -416,9 +417,9 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
             ".ink-running",
             ".ink-kill",
             ".ink-state.yml",
-        ])
-        .current_dir(repo_path)
-        .status();
+        ],
+    )
+    .with_context(|| "Failed to git rm book content")?;
 
     // Re-create .gitkeep placeholders so the directories exist for the next init
     for dir in &[
@@ -432,30 +433,18 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
         fs::write(dir_path.join(".gitkeep"), "")?;
     }
 
-    let run = |args: &[&str]| -> Result<()> {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(repo_path)
-            .status()?;
-        if !status.success() {
-            anyhow::bail!("git {} failed", args.join(" "));
-        }
-        Ok(())
-    };
+    git::run_git(repo_path, &["add", "-A"])?;
+    git::run_git(
+        repo_path,
+        &[
+            "commit",
+            "-m",
+            "reset: wipe book content for re-initialization",
+        ],
+    )?;
 
-    run(&["add", "-A"])?;
-    run(&[
-        "commit",
-        "-m",
-        "reset: wipe book content for re-initialization",
-    ])?;
-
-    let push = Command::new("git")
-        .args(["push", "origin", "main"])
-        .current_dir(repo_path)
-        .status()?;
-    if !push.success() {
-        tracing::warn!("git push skipped — no remote configured");
+    if let Err(e) = git::run_git(repo_path, &["push", "origin", "main"]) {
+        tracing::warn!("git push skipped: {}", e);
     }
 
     println!("\n  Reset complete.");
@@ -465,30 +454,15 @@ pub fn run_reset(repo_path: &Path) -> Result<()> {
 }
 
 fn git_commit_and_push(repo_path: &Path) -> Result<()> {
-    let run = |args: &[&str]| -> Result<()> {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(repo_path)
-            .status()?;
-        if !status.success() {
-            anyhow::bail!("git {} failed with status {}", args.join(" "), status);
-        }
-        Ok(())
-    };
-
-    run(&["add", "-A"])?;
-    run(&["commit", "-m", "init: scaffold book repository"])?;
+    git::run_git(repo_path, &["add", "-A"])?;
+    git::run_git(
+        repo_path,
+        &["commit", "-m", "init: scaffold book repository"],
+    )?;
 
     // Push is best-effort: skip if no remote is configured (common in local smoke tests)
-    let push_status = Command::new("git")
-        .args(["push", "origin", "main"])
-        .current_dir(repo_path)
-        .status()?;
-
-    if !push_status.success() {
-        tracing::warn!(
-            "git push origin main failed — no remote configured or push rejected; skipping"
-        );
+    if let Err(e) = git::run_git(repo_path, &["push", "origin", "main"]) {
+        tracing::warn!("git push skipped: {}", e);
     }
 
     Ok(())
@@ -788,7 +762,7 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
                 let target_words = target_pages * 250;
                 let content =
                     fs::read_to_string(&readme_path).with_context(|| "Failed to read README.md")?;
-                let updated = content
+                let mut updated = content
                     .lines()
                     .map(|line| {
                         if line.trim_start().starts_with("- **Language:**") && !lang.is_empty() {
@@ -802,6 +776,9 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
+                if !updated.ends_with('\n') {
+                    updated.push('\n');
+                }
                 fs::write(&readme_path, updated).with_context(|| "Failed to write README.md")?;
             }
         }
@@ -821,30 +798,18 @@ fn write_answers_to_files(repo_path: &Path, answers: &[(usize, String)]) -> Resu
 }
 
 fn commit_qa_answers(repo_path: &Path) -> Result<()> {
-    let run = |args: &[&str]| -> Result<()> {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(repo_path)
-            .status()?;
-        if !status.success() {
-            anyhow::bail!("git {} failed", args.join(" "));
-        }
-        Ok(())
-    };
+    git::run_git(repo_path, &["add", "-A"])?;
+    git::run_git(
+        repo_path,
+        &[
+            "commit",
+            "-m",
+            "init: populate global material from author Q&A",
+        ],
+    )?;
 
-    run(&["add", "-A"])?;
-    run(&[
-        "commit",
-        "-m",
-        "init: populate global material from author Q&A",
-    ])?;
-
-    let push = Command::new("git")
-        .args(["push", "origin", "main"])
-        .current_dir(repo_path)
-        .status()?;
-    if !push.success() {
-        tracing::warn!("git push skipped — no remote configured");
+    if let Err(e) = git::run_git(repo_path, &["push", "origin", "main"]) {
+        tracing::warn!("git push skipped: {}", e);
     }
 
     Ok(())

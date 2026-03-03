@@ -215,6 +215,24 @@ fn tools_list() -> Value {
                     },
                     "required": ["repo_path"]
                 }
+            },
+            {
+                "name": "apply_format",
+                "description": "Apply format patches to Full_Book.md (title, author, missing chapter headings). Accepts a 'patch' object with optional 'prepend' string and 'insert_headings' array of {before_anchor, heading}. Commits and pushes.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Absolute path to the book repository"
+                        },
+                        "patch": {
+                            "type": "object",
+                            "description": "Format patch: optional 'prepend' string inserted after the managed header; optional 'insert_headings' array of {before_anchor, heading} objects"
+                        }
+                    },
+                    "required": ["repo_path", "patch"]
+                }
             }
         ]
     })
@@ -284,6 +302,14 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
 
         "doctor" => maintenance::doctor(&repo_path).map_err(|e| e.to_string()),
 
+        "apply_format" => {
+            let patch = args
+                .get("patch")
+                .cloned()
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            maintenance::apply_format_patch(&repo_path, patch).map_err(|e| e.to_string())
+        }
+
         _ => Err(format!("Unknown tool: {name}")),
     }
 }
@@ -293,7 +319,9 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
 fn send(resp: &RpcResponse) {
     let line = serde_json::to_string(resp).expect("serialization cannot fail");
     println!("{line}");
-    io::stdout().flush().ok();
+    if let Err(e) = io::stdout().flush() {
+        eprintln!("ink-gateway-mcp: stdout flush error: {e}");
+    }
 }
 
 fn main() {

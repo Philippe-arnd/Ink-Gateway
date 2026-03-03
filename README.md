@@ -73,7 +73,7 @@ Once installed, register the MCP server so your AI client can call the tools nat
 claude mcp add ink-gateway -- ~/.local/bin/ink-gateway-mcp
 ```
 
-The MCP server exposes `session_open`, `session_close`, `complete`, `advance_chapter`, `init`, and `seed` as native tools — no shell wrappers needed.
+The MCP server exposes `session_open`, `session_close`, `complete`, `advance_chapter`, `apply_format`, `init`, `seed`, `status`, `update_agents`, and `doctor` as native tools — no shell wrappers needed.
 
 ---
 
@@ -87,12 +87,14 @@ The MCP server exposes `session_open`, `session_close`, `complete`, `advance_cha
 | `ink-cli init <repo>` | 📖 Scaffold a new book — interactive Q&A in TTY, JSON payload for agents (`--agent` forces JSON in TTY) |
 | `ink-cli session-open <repo>` | 🔓 Start a writing session — sync, detect edits, load context |
 | `ink-cli session-close <repo>` | 🔒 End a writing session — split current.md, update Full_Book, push |
-| `ink-cli complete <repo>` | 🏁 Mark book as finished — write `COMPLETE` marker, final push |
+| `ink-cli complete <repo>` | 🏁 Seal the book — checks pending revisions, format, then writes `COMPLETE` and pushes |
 | `ink-cli advance-chapter <repo>` | 📑 Advance to next chapter — update `.ink-state.yml`, commit (no push) |
+| `ink-cli apply-format <repo>` | 🎨 Patch `Full_Book.md` structure (title, author, chapter headings) via JSON on stdin — commits + pushes |
 | `ink-cli reset <repo>` | 🗑️ Wipe all content — allows re-running `init` (confirmation required) |
 | `ink-cli rollback <repo>` | ⏪ Revert to before the last session — force-push (confirmation required) |
 | `ink-cli status <repo>` | 📊 Read-only snapshot — chapter, word counts, lock status, completion flags |
 | `ink-cli update-agents <repo>` | 🔄 Refresh `AGENTS.md` (and seed files) from the latest embedded template |
+| `ink-cli doctor <repo>` | 🩺 Validate repo structure, config, git remote, and session state before first cron run |
 
 
 ---

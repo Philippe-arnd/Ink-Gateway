@@ -114,6 +114,13 @@ Description: Advance to the next chapter. Updates .ink-state.yml (increments cur
 Shell: ink-cli advance-chapter $repo_path
 ```
 
+```
+Tool: apply_format
+Description: Apply format corrections to Full_Book.md without a prose session. Inserts title, author, and missing chapter headings at the right positions. Commits and pushes.
+Shell: echo "$patch_json" | ink-cli apply-format $repo_path
+Stdin: JSON patch object
+```
+
 The `repo_path` is the local clone of this book repository.
 
 ---
@@ -127,7 +134,9 @@ Follow this sequence exactly, every session:
 3. **Chapter advance (conditional)** — If `chapter_close_suggested: true`, call `advance_chapter` before generating (see §Chapter Advancement).
 4. **Analyse** — Read `current_review.content` and `current_review.instructions`. Identify what the author changed and what they are asking for.
 5. **Consistency check** — Cross-reference any planned changes against `Soul.md`, `Outline.md`, `Characters.md`, `Lore.md`, and `chapters.current`. Make sure the planned prose is coherent with the global arc and chapter goals.
-6. **Generate** — Write `config.words_per_session` words of prose as the new `current.md` content (see §current.md Contract).
+6. **Generate** — Behaviour depends on `session_type` (see §current.md Contract):
+   - `"rewrite"` — Process each INK instruction from `current_review.instructions`. Emit one `<!-- INK:REWORKED:START/END -->` block per instruction. **Do not add a `<!-- INK:NEW:START/END -->` continuation block.**
+   - `"writing"` — Generate `config.words_per_session` words of new continuation prose wrapped in `<!-- INK:NEW:START/END -->`. No rework blocks needed.
 7. **Close** — Call `session_close` with the prose on stdin and optional flags.
 8. **Stop** — After `session_close`, **stop immediately**. Do not call `session_open` again. The next scheduled invocation handles continuation. The sole exception is step 9.
 9. **Complete (conditional)** — If `completion_ready` is `true` AND you confirm narrative closure, call `complete` once (see §Completion Discipline), then stop regardless of the response.
@@ -216,6 +225,7 @@ Skip the advance and proceed to §Analyse normally. `chapter_close_suggested` is
 | `chapter_close_suggested` | `true` when `current_chapter_word_count ≥ 90%` of `config.words_per_chapter` — triggers §Chapter Advancement |
 | `current_chapter_word_count` | Words appended to `Full_Book.md` in the current chapter so far |
 | `human_edits` | Files the author modified since the last session |
+| `session_type` | `"rewrite"` if INK instructions are present or `current.md` was edited; `"writing"` otherwise |
 | `snapshot_tag` | Git tag created for this session (for your logs) |
 
 ---
@@ -252,9 +262,13 @@ Your output IS the new `current.md`. It must contain:
 1. **Reworked passages** (for each INK instruction found): wrap each with
    ```
    <!-- INK:REWORKED:START -->
-   {rewritten passage — do NOT include the original INK instruction comment}
+   > **[Rework]** *[copy the exact instruction text here]*
+
+   {rewritten passage}
+
    <!-- INK:REWORKED:END -->
    ```
+   The `> **[Rework]** *...*` line is visible in the author's markdown editor and shows which instruction triggered this rewrite. It is stripped automatically by `session-close` before validated prose enters `Full_Book.md`.
 
 2. **New continuation prose** (the `words_per_session` continuation): wrap with
    ```
@@ -363,6 +377,45 @@ The book is sealed. Take these final steps in order:
 7. **Stop**, regardless of the response. If still `needs_revision`, the next scheduled invocation will handle the next rework cycle.
 
 Each rework invocation clears a batch of instructions and moves their validated prose to `Full_Book.md`. The cron scheduler drives repetition — never loop within a single invocation.
+
+### `status: "needs_formatting"`
+```json
+{
+  "status": "needs_formatting",
+  "format_issues": ["no_headings"],
+  "book_skeleton": {
+    "has_managed_header": true,
+    "sections": [
+      { "heading": "# The Lost Archive",        "first_line": "The storm had been brewing" },
+      { "heading": "# Chapter One: Beginnings", "first_line": "Kael stood at the threshold" },
+      { "heading": null,                         "first_line": "Three days had passed" }
+    ],
+    "heading_count": 4,
+    "chapters_expected": 5,
+    "current_chapter": 5,
+    "page_markers": { "count": 43, "sequential": true },
+    "total_word_count": 43210
+  }
+}
+```
+
+`Full_Book.md` has structural issues. Fix them **without loading the full prose**:
+
+1. Review `format_issues` for explicit structural problems.
+2. Review `book_skeleton.sections` to identify:
+   - Whether a title heading (H1) and author line appear near the top
+   - Which chapters are missing headings (compare `sections` list against `chapters_expected`)
+3. Generate a format patch using your knowledge from `global_material` (title, author, chapter outlines):
+   - `prepend`: front-matter to insert after the managed header — include the book title (`# Title`), author (`*by Author*`), and a divider (`---`)
+   - `insert_headings`: one entry per missing chapter heading; use the matching `first_line` from `book_skeleton.sections` as `before_anchor`
+4. Call `apply_format`:
+   ```bash
+   echo '$patch_json' | ink-cli apply-format $repo_path
+   ```
+5. Call `complete` again.
+
+**Do not call `session_open` for format fixes** — they do not require a prose session.
+**Stop after one format cycle**, regardless of whether `complete` returns `needs_formatting` again. The next scheduled invocation handles any remaining issues.
 
 ---
 

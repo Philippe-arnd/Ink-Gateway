@@ -1,25 +1,14 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::Local;
 use inquire::Confirm;
-use regex::Regex;
 use serde::Serialize;
 use std::path::Path;
-use std::sync::OnceLock;
 use tracing::info;
 
 use crate::config::Config;
+use crate::context::{extract_anchor, ink_re};
 use crate::git;
 use crate::state::InkState;
-
-// ─── Shared regex (compiled once) ────────────────────────────────────────────
-
-/// Returns the compiled regex for author INK instructions.
-/// The mandatory space after `INK:` ensures engine markers are never matched.
-/// Must stay consistent with context.rs.
-fn ink_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"<!-- INK: (.*?) -->").unwrap())
-}
 
 // ─── Output types ─────────────────────────────────────────────────────────────
 
@@ -68,14 +57,8 @@ fn extract_author_instructions(content: &str) -> (String, Vec<(String, String)>)
         let full_match = cap.get(0).expect("full match");
         let instruction = cap[1].trim().to_string();
 
-        // Anchor = last 200 chars of text preceding the comment (mirrors context.rs)
-        let preceding = content[..full_match.start()].trim_end();
-        let anchor_start = if preceding.len() > 200 {
-            preceding.len() - 200
-        } else {
-            0
-        };
-        let anchor = preceding[anchor_start..].to_string();
+        // Anchor = last 200 chars of text preceding the comment (shared with context.rs)
+        let anchor = extract_anchor(content, full_match.start());
 
         instructions.push((anchor, instruction));
     }
@@ -97,7 +80,7 @@ fn strip_engine_markers(text: &str) -> String {
                     | "<!-- INK:NEW:END -->"
                     | "<!-- INK:REWORKED:START -->"
                     | "<!-- INK:REWORKED:END -->"
-            )
+            ) && !t.starts_with("> **[Rework]**")
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -124,8 +107,14 @@ fn insert_pagination(start_word_count: u32, new_content: &str, words_per_page: u
 
     let mut chunks: Vec<String> = Vec::new();
     let mut cumulative = start_word_count;
-    // First boundary we haven't yet marked
-    let mut next_mark = ((start_word_count / words_per_page) + 1) * words_per_page;
+    // First boundary we haven't yet marked.
+    // When start_word_count is an exact multiple, the new content opens a new page
+    // immediately — so next_mark equals start_word_count (but never 0).
+    let mut next_mark = if start_word_count > 0 && start_word_count.is_multiple_of(words_per_page) {
+        start_word_count
+    } else {
+        ((start_word_count / words_per_page) + 1) * words_per_page
+    };
 
     for para in new_content.split("\n\n") {
         let para = para.trim();
@@ -134,8 +123,8 @@ fn insert_pagination(start_word_count: u32, new_content: &str, words_per_page: u
         }
         let para_words = para.split_whitespace().count() as u32;
 
-        // Insert marker(s) for every boundary this paragraph crosses or lands on
-        while cumulative < next_mark && cumulative + para_words >= next_mark {
+        // Insert marker(s) for every boundary this paragraph starts at, crosses, or lands on
+        while cumulative <= next_mark && cumulative + para_words >= next_mark {
             let page_num = next_mark / words_per_page + 1;
             chunks.push(format!("<!-- PAGE {} -->", page_num));
             next_mark += words_per_page;
@@ -266,7 +255,7 @@ fn update_readme_status(repo: &Path, new_status: &str) -> Result<()> {
     }
     let content =
         std::fs::read_to_string(&readme_path).with_context(|| "Failed to read README.md")?;
-    let updated = content
+    let mut updated = content
         .lines()
         .map(|line| {
             if line.trim_start().starts_with("- **Status:**") {
@@ -277,6 +266,9 @@ fn update_readme_status(repo: &Path, new_status: &str) -> Result<()> {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    if !updated.ends_with('\n') {
+        updated.push('\n');
+    }
     std::fs::write(&readme_path, updated).with_context(|| "Failed to write README.md")?;
     Ok(())
 }
@@ -508,11 +500,16 @@ pub fn complete_session(repo: &Path) -> Result<serde_json::Value> {
         }));
     }
 
+    // Format check — ensure Full_Book.md has proper structure before sealing
+    if let Some(format_result) = check_full_book_format(repo)? {
+        return Ok(format_result);
+    }
+
     // ── No instructions: finalize the book ───────────────────────────────────
     info!("No pending INK instructions — finalizing book");
 
-    // Strip engine markers before the final append — they must not appear in Full_Book.md.
-    let current_content = strip_engine_markers(&current_content);
+    // stripped_content already has INK comments removed; now strip engine markers too.
+    let current_content = strip_engine_markers(&stripped_content);
 
     // Append entire current.md to Full_Book.md (it's all validated at this point)
     let config = Config::load(repo)?;
@@ -766,7 +763,8 @@ pub fn doctor(repo: &Path) -> Result<serde_json::Value> {
     }
 
     // ── Config.yml parses and validates ──────────────────────────────────────
-    match Config::load(repo) {
+    let loaded_config = Config::load(repo);
+    match &loaded_config {
         Ok(cfg) => {
             check!("config_valid", true, serde_json::Value::Null);
 
@@ -858,7 +856,8 @@ pub fn doctor(repo: &Path) -> Result<serde_json::Value> {
     let lock_path = repo.join(".ink-running");
     if lock_path.exists() {
         let age = crate::context::read_lock_age(repo);
-        let timeout = Config::load(repo)
+        let timeout = loaded_config
+            .as_ref()
             .map(|c| c.session_timeout_minutes)
             .unwrap_or(60);
         let stale = age.map(|a| a > timeout).unwrap_or(false);
@@ -948,6 +947,230 @@ pub fn rollback_session(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
+// ─── format check ─────────────────────────────────────────────────────────────
+
+/// Scan `Full_Book.md` for structural issues without loading full prose into context.
+/// Returns `None` if the book passes all checks, or `Some(needs_formatting JSON)` if issues found.
+fn check_full_book_format(repo: &Path) -> Result<Option<serde_json::Value>> {
+    let book_path = repo.join("Current version").join("Full_Book.md");
+
+    // Nothing to check if Full_Book.md doesn't exist yet
+    if !book_path.exists() {
+        return Ok(None);
+    }
+
+    let config = Config::load(repo)?;
+    let state = InkState::load(repo).unwrap_or_default();
+
+    let content = std::fs::read_to_string(&book_path)
+        .with_context(|| "Failed to read Full_Book.md for format check")?;
+
+    let mut format_issues: Vec<&'static str> = Vec::new();
+
+    // ── Check 1: managed header ───────────────────────────────────────────────
+    let first_nonempty = content.lines().find(|l| !l.trim().is_empty());
+    let has_managed_header = first_nonempty
+        .map(|l| l.trim_start().starts_with("<!--"))
+        .unwrap_or(false);
+    if !has_managed_header {
+        format_issues.push("missing_managed_header");
+    }
+
+    // ── Scan lines: build sections skeleton + collect page markers ────────────
+    let mut sections: Vec<serde_json::Value> = Vec::new();
+    let mut heading_count: u32 = 0;
+    let mut page_numbers: Vec<u32> = Vec::new();
+
+    let mut cur_heading: Option<String> = None;
+    let mut cur_first_line: Option<String> = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // PAGE marker: <!-- PAGE N -->
+        if trimmed.starts_with("<!-- PAGE ") && trimmed.ends_with(" -->") {
+            let inner = &trimmed["<!-- PAGE ".len()..trimmed.len() - " -->".len()];
+            if let Ok(n) = inner.trim().parse::<u32>() {
+                page_numbers.push(n);
+            }
+            continue;
+        }
+
+        // Heading: start a new section
+        if trimmed.starts_with("# ") || trimmed.starts_with("## ") {
+            // Flush the current section (only if it has content)
+            if cur_heading.is_some() || cur_first_line.is_some() {
+                sections.push(serde_json::json!({
+                    "heading": cur_heading,
+                    "first_line": cur_first_line,
+                }));
+            }
+            cur_heading = Some(trimmed.to_string());
+            cur_first_line = None;
+            heading_count += 1;
+            continue;
+        }
+
+        // First prose line of this section (skip blanks and HTML comments)
+        if cur_first_line.is_none() && !trimmed.is_empty() && !trimmed.starts_with("<!--") {
+            let s = if trimmed.len() > 200 {
+                &trimmed[..200]
+            } else {
+                trimmed
+            };
+            cur_first_line = Some(s.to_string());
+        }
+    }
+
+    // Flush the final pending section
+    if cur_heading.is_some() || cur_first_line.is_some() {
+        sections.push(serde_json::json!({
+            "heading": cur_heading,
+            "first_line": cur_first_line,
+        }));
+    }
+
+    // ── Check 2: no headings at all ───────────────────────────────────────────
+    if heading_count == 0 {
+        format_issues.push("no_headings");
+    }
+
+    // ── Check 3: page markers sequential (only when pagination is active) ─────
+    let page_count = page_numbers.len() as u32;
+    let pages_sequential = page_numbers.is_empty()
+        || (page_numbers[0] == 1 && page_numbers.windows(2).all(|w| w[1] == w[0] + 1));
+
+    if config.words_per_page > 0 && !page_numbers.is_empty() && !pages_sequential {
+        format_issues.push("page_markers_not_sequential");
+    }
+
+    let total_word_count = count_prose_words(&content);
+
+    let skeleton = serde_json::json!({
+        "has_managed_header": has_managed_header,
+        "sections": sections,
+        "heading_count": heading_count,
+        "chapters_expected": config.chapter_count,
+        "current_chapter": state.current_chapter,
+        "page_markers": {
+            "count": page_count,
+            "sequential": pages_sequential,
+        },
+        "total_word_count": total_word_count,
+    });
+
+    if format_issues.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(serde_json::json!({
+            "status": "needs_formatting",
+            "format_issues": format_issues,
+            "book_skeleton": skeleton,
+        })))
+    }
+}
+
+// ─── apply-format ──────────────────────────────────────────────────────────────
+
+/// Apply structural format patches to `Full_Book.md`:
+/// - `prepend`: text inserted after the managed-file header comment
+/// - `insert_headings`: each entry `{ before_anchor, heading }` inserts a heading line
+///   before the first line containing `before_anchor` as a substring
+///
+/// Commits and pushes `Full_Book.md` on success.
+pub fn apply_format_patch(repo: &Path, patch: serde_json::Value) -> Result<serde_json::Value> {
+    // Guard: cannot patch a sealed book
+    if repo.join("COMPLETE").exists() {
+        return Err(anyhow!(
+            "book already complete — format patches cannot be applied after sealing"
+        ));
+    }
+
+    let book_path = repo.join("Current version").join("Full_Book.md");
+    if !book_path.exists() {
+        return Err(anyhow!("Full_Book.md does not exist — nothing to patch"));
+    }
+
+    let mut content = std::fs::read_to_string(&book_path)
+        .with_context(|| "Failed to read Full_Book.md for format patch")?;
+
+    let mut patches_applied: u32 = 0;
+    let mut warnings: Vec<String> = Vec::new();
+
+    // ── Apply prepend ─────────────────────────────────────────────────────────
+    if let Some(prepend) = patch.get("prepend").and_then(|v| v.as_str()) {
+        if !prepend.is_empty() {
+            // Find the end of the first `-->` (managed-file header closing tag)
+            let after_header = content
+                .find("-->")
+                .map(|pos| pos + "-->".len())
+                .unwrap_or(0);
+            // Skip one trailing newline if present so our insertion follows naturally
+            let insert_pos = if content[after_header..].starts_with('\n') {
+                after_header + 1
+            } else {
+                after_header
+            };
+            content.insert_str(insert_pos, &format!("\n{}", prepend));
+            patches_applied += 1;
+        }
+    }
+
+    // ── Apply insert_headings ─────────────────────────────────────────────────
+    if let Some(inserts) = patch.get("insert_headings").and_then(|v| v.as_array()) {
+        for entry in inserts {
+            let before_anchor = match entry.get("before_anchor").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s,
+                _ => {
+                    warnings.push("insert_headings entry missing 'before_anchor'".to_string());
+                    continue;
+                }
+            };
+            let heading = match entry.get("heading").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s,
+                _ => {
+                    warnings.push("insert_headings entry missing 'heading'".to_string());
+                    continue;
+                }
+            };
+
+            // Find the byte position of the anchor, then walk back to the line start
+            if let Some(anchor_pos) = content.find(before_anchor) {
+                let line_start = content[..anchor_pos]
+                    .rfind('\n')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                let heading_with_nl = if heading.ends_with('\n') {
+                    heading.to_string()
+                } else {
+                    format!("{}\n\n", heading)
+                };
+                content.insert_str(line_start, &heading_with_nl);
+                patches_applied += 1;
+            } else {
+                warnings.push(format!("before_anchor not found: '{before_anchor}'"));
+            }
+        }
+    }
+
+    // Write the modified file
+    std::fs::write(&book_path, &content).with_context(|| "Failed to write patched Full_Book.md")?;
+
+    // Commit and push
+    git::run_git(repo, &["add", "Current version/Full_Book.md"])
+        .with_context(|| "Failed to git add Full_Book.md")?;
+    git::run_git(repo, &["commit", "-m", "fmt: apply format corrections"])
+        .with_context(|| "Failed to commit format corrections")?;
+    git::run_git(repo, &["push", "origin", "main"])
+        .with_context(|| "Failed to push format corrections")?;
+
+    Ok(serde_json::json!({
+        "status": "applied",
+        "patches_applied": patches_applied,
+        "warnings": warnings,
+    }))
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1007,6 +1230,15 @@ mod tests {
         let stripped = strip_engine_markers(content);
         assert!(!stripped.contains("INK:REWORKED"));
         assert!(stripped.contains('B'));
+    }
+
+    #[test]
+    fn strip_engine_markers_strips_rework_annotation() {
+        let input = "<!-- INK:REWORKED:START -->\n> **[Rework]** *Fix pacing*\n\nNew prose.\n\n<!-- INK:REWORKED:END -->";
+        let result = strip_engine_markers(input);
+        assert!(!result.contains("<!-- INK:REWORKED:START -->"));
+        assert!(!result.contains("> **[Rework]**"));
+        assert!(result.contains("New prose."));
     }
 
     #[test]
@@ -1118,5 +1350,71 @@ mod tests {
         let min: u32 = (words_per_chapter as f64 * 0.9) as u32; // 2700
         let current_word_count: u32 = 2699;
         assert!(current_word_count < min);
+    }
+
+    #[test]
+    fn pagination_starts_at_exact_boundary() {
+        // Already at 500 words (exactly 2 pages). New content should open page 3.
+        let para = "word ".repeat(20);
+        let result = insert_pagination(500, para.trim(), 250);
+        assert!(
+            result.contains("<!-- PAGE 3 -->"),
+            "expected PAGE 3 in: {result}"
+        );
+    }
+
+    #[test]
+    fn anchor_extraction_safe_on_multibyte() {
+        // Ensure extract_anchor doesn't panic on multi-byte characters
+        let text = "é".repeat(300);
+        let anchor = crate::context::extract_anchor(&text, text.len());
+        assert_eq!(anchor.chars().count(), 200);
+    }
+
+    // ── format check tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn format_check_detects_missing_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_config(tmp.path(), 3000);
+        write_test_state(tmp.path(), 1, 0);
+
+        let book_dir = tmp.path().join("Current version");
+        std::fs::create_dir_all(&book_dir).unwrap();
+        // No managed header — starts directly with a heading
+        std::fs::write(
+            book_dir.join("Full_Book.md"),
+            "# Chapter One\n\nSome prose here.\n",
+        )
+        .unwrap();
+
+        let result = check_full_book_format(tmp.path()).unwrap();
+        let json = result.expect("should return format issues");
+        let issues = json["format_issues"].as_array().unwrap();
+        assert!(
+            issues
+                .iter()
+                .any(|v| v.as_str() == Some("missing_managed_header")),
+            "expected missing_managed_header in format_issues: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn format_check_clean_book_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_config(tmp.path(), 3000);
+        write_test_state(tmp.path(), 1, 0);
+
+        let book_dir = tmp.path().join("Current version");
+        std::fs::create_dir_all(&book_dir).unwrap();
+        let content = concat!(
+            "<!-- ⚠ INK-GATEWAY:MANAGED — Do not edit this file directly. -->\n\n",
+            "# Book Title\n\n",
+            "Some prose here.\n"
+        );
+        std::fs::write(book_dir.join("Full_Book.md"), content).unwrap();
+
+        let result = check_full_book_format(tmp.path()).unwrap();
+        assert!(result.is_none(), "clean book should return None");
     }
 }

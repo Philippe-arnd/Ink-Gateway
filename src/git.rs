@@ -59,13 +59,20 @@ pub fn collect_modified_files(repo: &Path) -> Result<Vec<String>> {
     let files: Vec<String> = output
         .lines()
         .filter_map(|line| {
-            if line.len() >= 3 {
-                let filename = line[3..].trim().to_string();
-                if !filename.is_empty() {
-                    return Some(filename);
+            // git status --short format: "XY filename" (2-char status + space + path).
+            // Use .get() to avoid panic on multi-byte UTF-8 characters.
+            let raw = line.get(3..)?.trim().to_string();
+            if raw.is_empty() {
+                return None;
+            }
+            // For renames/copies ("R old -> new"), extract the destination path.
+            if let Some(arrow_pos) = raw.find(" -> ") {
+                let dest = raw[arrow_pos + 4..].trim().to_string();
+                if !dest.is_empty() {
+                    return Some(dest);
                 }
             }
-            None
+            Some(raw)
         })
         .collect();
     Ok(files)
@@ -122,22 +129,10 @@ pub fn push_tags(repo: &Path) -> Result<()> {
 }
 
 pub fn setup_draft_branch(repo: &Path) -> Result<()> {
-    // Try to checkout existing draft branch, create it if it doesn't exist
-    let checkout_result = run_git(repo, &["checkout", "draft"]);
-
-    match checkout_result {
-        Ok(_) => {
-            info!("Checked out existing draft branch");
-        }
-        Err(_) => {
-            info!("Creating new draft branch...");
-            run_git(repo, &["checkout", "-b", "draft"])
-                .with_context(|| "Failed to create draft branch")?;
-        }
-    }
-
-    info!("Rebasing draft onto main...");
-    run_git(repo, &["rebase", "main"]).with_context(|| "Failed to rebase draft onto main")?;
-
+    // Create or force-reset draft to match main — atomic, never conflicts.
+    // This matches the pattern used in complete_session (git branch -f draft main).
+    info!("Setting up draft branch (force-reset to main)...");
+    run_git(repo, &["checkout", "-B", "draft", "main"])
+        .with_context(|| "Failed to create/reset draft branch")?;
     Ok(())
 }

@@ -80,11 +80,7 @@ impl Config {
             "Config.yml: words_per_chapter must be > 0, got {}",
             self.words_per_chapter
         );
-        anyhow::ensure!(
-            self.words_per_page > 0,
-            "Config.yml: words_per_page must be > 0, got {}",
-            self.words_per_page
-        );
+        // words_per_page: 0 disables pagination (handled by insert_pagination).
         anyhow::ensure!(
             self.session_timeout_minutes > 0,
             "Config.yml: session_timeout_minutes must be > 0, got {}",

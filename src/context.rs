@@ -14,10 +14,26 @@ use crate::state::InkState;
 
 /// Returns the compiled regex for author INK instructions.
 /// The mandatory space after `INK:` ensures engine markers are never matched.
-/// Must stay consistent with maintenance.rs.
-fn ink_re() -> &'static Regex {
+/// Used by both context.rs and maintenance.rs — single source of truth.
+pub(crate) fn ink_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"<!-- INK: (.*?) -->").unwrap())
+}
+
+/// Extract the last 200 *characters* of text preceding a regex match.
+/// Char-based (not byte-based) to avoid panics on multi-byte UTF-8.
+pub(crate) fn extract_anchor(text: &str, match_start: usize) -> String {
+    let preceding = text[..match_start].trim_end();
+    preceding
+        .chars()
+        .rev()
+        .take(200)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 // ─── Output types ────────────────────────────────────────────────────────────
@@ -75,6 +91,7 @@ pub struct SessionPayload {
     pub chapter_close_suggested: bool,
     pub current_chapter_word_count: u32,
     pub chapter_progress_pct: u8,
+    pub session_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -175,19 +192,26 @@ pub fn load_global_material(repo: &Path, summary_entries: usize) -> Result<Vec<F
         })?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-        .filter_map(|e| {
+        .map(|e| -> Result<Option<FileContent>> {
             let path = e.path();
-            let filename = path.file_name()?.to_string_lossy().to_string();
+            let filename = match path.file_name() {
+                Some(n) => n.to_string_lossy().to_string(),
+                None => return Ok(None),
+            };
             // Skip Config.yml — it's surfaced separately
             if filename == "Config.yml" {
-                return None;
+                return Ok(None);
             }
-            let mut content = std::fs::read_to_string(&path).ok()?;
+            let mut content = std::fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read Global Material/{}", filename))?;
             if filename == "Summary.md" {
                 content = truncate_summary(&content, summary_entries);
             }
-            Some(FileContent { filename, content })
+            Ok(Some(FileContent { filename, content }))
         })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
 
     files.sort_by(|a, b| a.filename.cmp(&b.filename));
@@ -282,19 +306,10 @@ pub fn extract_ink_instructions(text: &str) -> (String, Vec<Instruction>) {
         let instruction_text = cap[1].trim().to_string();
 
         // Anchor = up to 200 chars of text preceding this comment
-        let start = full_match.start();
-        let preceding = &text[..start];
-        let anchor: String = preceding
-            .chars()
-            .rev()
-            .take(200)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
+        let anchor = extract_anchor(text, full_match.start());
 
         instructions.push(Instruction {
-            anchor: anchor.trim().to_string(),
+            anchor,
             instruction: instruction_text,
         });
     }
@@ -380,6 +395,7 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
             chapter_close_suggested: false,
             current_chapter_word_count: 0,
             chapter_progress_pct: 0,
+            session_type: "writing".to_string(),
         });
     }
 
@@ -457,11 +473,12 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
                 word_count: WordCount {
                     total: 0,
                     target: config.target_length,
-                    remaining: 0,
+                    remaining: config.target_length,
                 },
                 chapter_close_suggested: false,
                 current_chapter_word_count: state.current_chapter_word_count,
                 chapter_progress_pct: 0,
+                session_type: "writing".to_string(),
             });
         }
         Some(age) => {
@@ -545,6 +562,14 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
         .unwrap_or(0)
         .min(100) as u8;
 
+    // Rewrite session if INK instructions are present OR current.md was edited by author.
+    let current_md_edited = human_edits.iter().any(|f| f.ends_with("current.md"));
+    let session_type = if !instructions.is_empty() || current_md_edited {
+        "rewrite".to_string()
+    } else {
+        "writing".to_string()
+    };
+
     Ok(SessionPayload {
         session_already_run: false,
         kill_requested: false,
@@ -565,5 +590,6 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
         chapter_close_suggested,
         current_chapter_word_count: state.current_chapter_word_count,
         chapter_progress_pct,
+        session_type,
     })
 }

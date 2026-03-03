@@ -95,6 +95,11 @@ enum Commands {
         /// Path to the book repository
         repo_path: PathBuf,
     },
+    /// Apply format patches to Full_Book.md (title, author, chapter headings). Reads JSON patch from stdin.
+    ApplyFormat {
+        #[arg(value_name = "REPO_PATH")]
+        repo_path: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -168,6 +173,15 @@ fn main() -> Result<()> {
         }
         Commands::Doctor { repo_path } => {
             let result = maintenance::doctor(&repo_path)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Commands::ApplyFormat { repo_path } => {
+            let mut input = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)
+                .with_context(|| "Failed to read patch JSON from stdin")?;
+            let patch: serde_json::Value =
+                serde_json::from_str(&input).with_context(|| "Failed to parse patch JSON")?;
+            let result = maintenance::apply_format_patch(&repo_path, patch)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
