@@ -2,6 +2,11 @@
   <img src="logo.svg" alt="Ink Gateway" width="120"/>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Philippe-arnd/Ink-Gateway/releases/latest"><img src="https://img.shields.io/github/v/release/Philippe-arnd/Ink-Gateway" alt="Latest Release"/></a>
+  <a href="https://github.com/Philippe-arnd/Ink-Gateway/actions/workflows/ci.yml"><img src="https://github.com/Philippe-arnd/Ink-Gateway/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+</p>
+
 # Ink Gateway
 
 > A collaborative AI-driven framework for writing books and novels. The engine writes autonomously on any schedule; the human author edits either in the IDE or in a browser-based markdown editor — no Git knowledge required.
