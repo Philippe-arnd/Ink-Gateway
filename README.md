@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/Philippe-arnd/Ink-Gateway/releases/latest"><img src="https://img.shields.io/github/v/release/Philippe-arnd/Ink-Gateway" alt="Latest Release"/></a>
   <a href="https://github.com/Philippe-arnd/Ink-Gateway/actions/workflows/ci.yml"><img src="https://github.com/Philippe-arnd/Ink-Gateway/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"/></a>
 </p>
 
 # Ink Gateway
