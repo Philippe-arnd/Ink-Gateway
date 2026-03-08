@@ -5,8 +5,9 @@ use serde::Serialize;
 use std::path::Path;
 use tracing::info;
 
-use crate::book::{append_to_full_book, check_full_book_format, count_prose_words,
-    strip_engine_markers};
+use crate::book::{
+    append_to_full_book, check_full_book_format, count_prose_words, strip_engine_markers,
+};
 use crate::config::Config;
 use crate::context::{extract_anchor, ink_re};
 use crate::git;

@@ -328,8 +328,7 @@ pub fn apply_format_patch(repo: &Path, patch: serde_json::Value) -> Result<serde
     }
 
     // Write the modified file
-    std::fs::write(&book_path, &content)
-        .with_context(|| "Failed to write patched Full_Book.md")?;
+    std::fs::write(&book_path, &content).with_context(|| "Failed to write patched Full_Book.md")?;
 
     // Commit and push
     git::run_git(repo, &["add", "Current version/Full_Book.md"])
