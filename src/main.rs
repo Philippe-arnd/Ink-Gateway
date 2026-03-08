@@ -1,3 +1,4 @@
+mod book;
 mod config;
 mod context;
 mod git;
@@ -181,7 +182,7 @@ fn main() -> Result<()> {
                 .with_context(|| "Failed to read patch JSON from stdin")?;
             let patch: serde_json::Value =
                 serde_json::from_str(&input).with_context(|| "Failed to parse patch JSON")?;
-            let result = maintenance::apply_format_patch(&repo_path, patch)?;
+            let result = book::apply_format_patch(&repo_path, patch)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }

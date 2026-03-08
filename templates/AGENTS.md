@@ -67,7 +67,11 @@ Present each question to the human author in order, one at a time. Once you have
 
 Write each expanded file using the structure below:
 
-1. **`Global Material/Config.yml`** — update only the `language:` field. Do not overwrite the rest.
+1. **`Global Material/Config.yml`** — update these fields only (read the file first, replace matching lines, preserve all others):
+   - `language:` from Q1 (e.g. `language: French`)
+   - `target_length:` from Q3: `<pages × 250>` (e.g. 250 pages → `target_length: 62500`)
+   - `words_per_session:` from Q4: `<pages × 250>` (e.g. 6 pages → `words_per_session: 1500`)
+   - `chapter_count:` derived from Q3: `ceil(target_length / 3000)`, minimum 1
 2. **`Global Material/Soul.md`** — `# Soul\n\n## Genre & Tone\n\n...\n\n## Narrator & Perspective\n\n...\n`
 3. **`Global Material/Characters.md`** — `# Characters\n\n## Protagonist\n\n...\n\n## Antagonist / Obstacle\n\n...\n`
 4. **`Global Material/Outline.md`** — `# Outline\n\n## Opening\n\n...\n\n## Midpoint\n\n...\n\n## Ending\n\n...\n`

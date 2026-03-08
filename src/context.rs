@@ -334,7 +334,7 @@ pub fn load_word_count(repo: &Path, target: u32) -> Result<WordCount> {
     let content = std::fs::read_to_string(&path).with_context(|| "Failed to read Full_Book.md")?;
 
     // Use the same counter as session-close so both modules always agree.
-    let total = crate::maintenance::count_prose_words(&content);
+    let total = crate::book::count_prose_words(&content);
     let remaining = target.saturating_sub(total);
 
     Ok(WordCount {

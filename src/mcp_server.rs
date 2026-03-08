@@ -2,6 +2,7 @@
 // subset of their functions. Suppress dead-code lint for this binary target.
 #![allow(dead_code)]
 
+mod book;
 mod config;
 mod context;
 mod git;
@@ -307,7 +308,7 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
                 .get("patch")
                 .cloned()
                 .unwrap_or(serde_json::Value::Object(Default::default()));
-            maintenance::apply_format_patch(&repo_path, patch).map_err(|e| e.to_string())
+            book::apply_format_patch(&repo_path, patch).map_err(|e| e.to_string())
         }
 
         _ => Err(format!("Unknown tool: {name}")),

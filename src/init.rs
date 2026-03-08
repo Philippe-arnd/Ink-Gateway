@@ -260,7 +260,7 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
         },
         // ── Characters ─────────────────────────────────────────────────────────
         Question {
-            question: "Who is the protagonist? Give a name and one defining trait.",
+            question: "Who are the Characters? Give names, defining traits and relations.",
             hint: "e.g. Mara, a disgraced soldier haunted by a massacre she survived",
             target_file: "Global Material/Characters.md",
             options: None,
