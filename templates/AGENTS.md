@@ -261,7 +261,7 @@ The file may contain:
 Everything **before** the first `<!-- INK: [instruction] -->` tag is **validated** — the author accepted it. On `session_close`, `ink-cli` automatically extracts this validated section and appends it to `Full_Book.md`. You do not need to manage this split.
 
 ### What you write (sent via stdin to `session_close`)
-Your output IS the new `current.md`. It must contain:
+Your output IS the new `current.md`. It must contain **only** your generated blocks — do NOT include any content from `current_review.content` in your output. The old prose is already saved in `Full_Book.md`; echoing it back would duplicate and accumulate it in `current.md`.
 
 1. **Reworked passages** (for each INK instruction found): wrap each with
    ```
@@ -270,9 +270,15 @@ Your output IS the new `current.md`. It must contain:
 
    {rewritten passage}
 
+   <!-- INK:ORIGINAL:START -->
+   > **Original:**
+
+   {original passage verbatim, as it appeared in current_review.content}
+
+   <!-- INK:ORIGINAL:END -->
    <!-- INK:REWORKED:END -->
    ```
-   The `> **[Rework]** *...*` line is visible in the author's markdown editor and shows which instruction triggered this rewrite. It is stripped automatically by `session-close` before validated prose enters `Full_Book.md`.
+   The `> **[Rework]** *...*` line and the entire `<!-- INK:ORIGINAL:START/END -->` block (including the original text) are stripped automatically by `session-close` before validated prose enters `Full_Book.md`. The author sees both versions in their editor to compare, then the original is discarded once the rework is validated.
 
 2. **New continuation prose** (the `words_per_session` continuation): wrap with
    ```

@@ -19,19 +19,58 @@ pub(crate) const FULL_BOOK_HEADER: &str =
 /// Per spec, `<!-- INK:NEW:START/END -->` and `<!-- INK:REWORKED:START/END -->` markers
 /// live only in `current.md` and must never appear in the validated vault.
 pub(crate) fn strip_engine_markers(text: &str) -> String {
-    text.lines()
-        .filter(|l| {
-            let t = l.trim();
-            !matches!(
-                t,
-                "<!-- INK:NEW:START -->"
-                    | "<!-- INK:NEW:END -->"
-                    | "<!-- INK:REWORKED:START -->"
-                    | "<!-- INK:REWORKED:END -->"
-            ) && !t.starts_with("> **[Rework]**")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_original = false;
+    for line in text.lines() {
+        let t = line.trim();
+        // ORIGINAL blocks: drop the markers AND everything between them
+        if t == "<!-- INK:ORIGINAL:START -->" {
+            in_original = true;
+            continue;
+        }
+        if t == "<!-- INK:ORIGINAL:END -->" {
+            in_original = false;
+            continue;
+        }
+        if in_original {
+            continue;
+        }
+        // Other engine markers: drop the marker lines, keep the content
+        if matches!(
+            t,
+            "<!-- INK:NEW:START -->"
+                | "<!-- INK:NEW:END -->"
+                | "<!-- INK:REWORKED:START -->"
+                | "<!-- INK:REWORKED:END -->"
+        ) || t.starts_with("> **[Rework]**")
+        {
+            continue;
+        }
+        out.push(line);
+    }
+    out.join("\n")
+}
+
+/// Strip author INK instruction comments (`<!-- INK: ... -->`, note the space after the colon)
+/// from engine-generated prose before writing new `current.md`.
+/// These comments belong only in `current.md` as active directives written by the human author;
+/// if the engine echoes them back they accumulate across sessions.
+pub(crate) fn strip_author_ink_instructions(text: &str) -> String {
+    use crate::context::ink_re;
+    let result = ink_re().replace_all(text, "");
+    // Collapse runs of blank lines left by stripped instructions into a single blank line
+    let mut out = String::with_capacity(result.len());
+    let mut prev_blank = false;
+    for line in result.lines() {
+        let blank = line.trim().is_empty();
+        if blank && prev_blank {
+            continue; // skip consecutive blank lines
+        }
+        out.push_str(line);
+        out.push('\n');
+        prev_blank = blank;
+    }
+    out
 }
 
 /// Count prose words, ignoring HTML comment lines (e.g. `<!-- PAGE N -->`).
@@ -388,6 +427,31 @@ mod tests {
         assert!(!result.contains("<!-- INK:REWORKED:START -->"));
         assert!(!result.contains("> **[Rework]**"));
         assert!(result.contains("New prose."));
+    }
+
+    #[test]
+    fn strip_engine_markers_removes_original_block_with_content() {
+        let input = "\
+<!-- INK:REWORKED:START -->
+> **[Rework]** *Fix the pacing*
+
+Rewritten prose here.
+
+<!-- INK:ORIGINAL:START -->
+> **Original:**
+
+Old prose here.
+
+<!-- INK:ORIGINAL:END -->
+<!-- INK:REWORKED:END -->";
+        let result = strip_engine_markers(input);
+        assert!(result.contains("Rewritten prose here."));
+        assert!(!result.contains("Old prose here."));
+        assert!(!result.contains("<!-- INK:ORIGINAL:START -->"));
+        assert!(!result.contains("<!-- INK:ORIGINAL:END -->"));
+        assert!(!result.contains("<!-- INK:REWORKED:START -->"));
+        assert!(!result.contains("> **[Rework]**"));
+        assert!(!result.contains("> **Original:**"));
     }
 
     #[test]

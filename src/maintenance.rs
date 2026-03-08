@@ -6,7 +6,8 @@ use std::path::Path;
 use tracing::info;
 
 use crate::book::{
-    append_to_full_book, check_full_book_format, count_prose_words, strip_engine_markers,
+    append_to_full_book, check_full_book_format, count_prose_words, strip_author_ink_instructions,
+    strip_engine_markers,
 };
 use crate::config::Config;
 use crate::context::{extract_anchor, ink_re};
@@ -254,6 +255,10 @@ pub fn close_session(
     // produced no REWORKED blocks, the rework was silently skipped.
     // Carry the pending section forward so instructions surface again in the
     // next session-open payload instead of being permanently discarded.
+    // Strip any author INK instructions the engine may have echoed back — they must
+    // never accumulate in current.md across sessions.
+    let prose_clean = strip_author_ink_instructions(prose);
+
     let new_current = match pending_opt {
         Some(ref pending) if !prose.contains("<!-- INK:REWORKED:START -->") => {
             let instruction_count = ink_re().find_iter(pending).count();
@@ -266,9 +271,9 @@ pub fn close_session(
             // don't accumulate across sessions (markers belong only in current.md
             // when freshly generated, not when preserved from a prior session).
             let pending_clean = strip_engine_markers(pending);
-            format!("{}\n\n{}", prose.trim_end(), pending_clean.trim())
+            format!("{}\n\n{}", prose_clean.trim_end(), pending_clean.trim())
         }
-        _ => prose.to_string(),
+        _ => prose_clean,
     };
 
     info!("Writing new Review/current.md");
