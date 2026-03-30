@@ -99,18 +99,20 @@ fn insert_pagination(start_word_count: u32, new_content: &str, words_per_page: u
     // First boundary we haven't yet marked.
     // When start_word_count is an exact multiple, the new content opens a new page
     // immediately — so next_mark equals start_word_count (but never 0).
-    let mut next_mark = if start_word_count > 0 && start_word_count.is_multiple_of(words_per_page) {
-        start_word_count
-    } else {
-        ((start_word_count / words_per_page) + 1) * words_per_page
-    };
+    let mut next_mark = ((start_word_count / words_per_page) + 1) * words_per_page;
 
     for para in new_content.split("\n\n") {
         let para = para.trim();
         if para.is_empty() {
             continue;
         }
-        let para_words = para.split_whitespace().count() as u32;
+        // Count words the same way as count_prose_words — skip HTML comment lines so
+        // that `cumulative` never drifts from the book's true prose word count.
+        let para_words = para
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("<!--"))
+            .flat_map(|l| l.split_whitespace())
+            .count() as u32;
 
         // Insert marker(s) for every boundary this paragraph starts at, crosses, or lands on
         while cumulative <= next_mark && cumulative + para_words >= next_mark {
@@ -226,12 +228,8 @@ pub(crate) fn check_full_book_format(repo: &Path) -> Result<Option<serde_json::V
 
         // First prose line of this section (skip blanks and HTML comments)
         if cur_first_line.is_none() && !trimmed.is_empty() && !trimmed.starts_with("<!--") {
-            let s = if trimmed.len() > 200 {
-                &trimmed[..200]
-            } else {
-                trimmed
-            };
-            cur_first_line = Some(s.to_string());
+            let s: String = trimmed.chars().take(200).collect();
+            cur_first_line = Some(s);
         }
     }
 
@@ -487,12 +485,18 @@ Old prose here.
 
     #[test]
     fn pagination_starts_at_exact_boundary() {
-        // Already at 500 words (exactly 2 pages). New content should open page 3.
-        let para = "word ".repeat(20);
+        // Already at 500 words (exactly 2 pages). PAGE 3 was already inserted by the
+        // previous session when it crossed word 500. New content should target PAGE 4
+        // at word 750 — inserting PAGE 3 again would create a duplicate marker.
+        let para = "word ".repeat(300);
         let result = insert_pagination(500, para.trim(), 250);
         assert!(
-            result.contains("<!-- PAGE 3 -->"),
-            "expected PAGE 3 in: {result}"
+            !result.contains("<!-- PAGE 3 -->"),
+            "PAGE 3 already in book — must not insert duplicate: {result}"
+        );
+        assert!(
+            result.contains("<!-- PAGE 4 -->"),
+            "expected PAGE 4 in: {result}"
         );
     }
 

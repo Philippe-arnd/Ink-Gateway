@@ -73,4 +73,4 @@ done
 echo ""
 echo "Register the MCP server with your AI client:"
 echo "  claude mcp add ink-gateway -- ${DEST}/ink-gateway-mcp"
-echo "  gemini mcp add ink-gateway -- ${DEST}/ink-gateway-mcp"
+echo "  gemini mcp add ink-gateway ${DEST}/ink-gateway-mcp"

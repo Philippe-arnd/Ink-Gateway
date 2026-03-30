@@ -131,9 +131,13 @@ fn update_readme_chapters(
         list.push_str(&format!("{}. **{}**{}\n", i, title, suffix));
     }
 
-    // Replace from the marker line to the next \n--- separator (kept intact)
+    // Replace from the marker line to the next \n--- separator (kept intact).
+    // If the separator is absent the README has an unexpected structure — bail out
+    // rather than silently truncating everything below the marker.
     let after_marker = &content[marker_pos + MARKER.len()..];
-    let sep_offset = after_marker.find("\n---").unwrap_or(after_marker.len());
+    let Some(sep_offset) = after_marker.find("\n---") else {
+        return Ok(());
+    };
 
     let new_content = format!(
         "{}{}\n\n{}{}",
@@ -191,7 +195,7 @@ pub fn close_session(
 
     let config = Config::load(repo)?;
     let now = Local::now();
-    let session_word_count = prose.split_whitespace().count() as u32;
+    let session_word_count = crate::book::count_prose_words(prose);
 
     // ── Step 1: Read old current.md, split at first INK instruction ──────────
     info!("Reading Review/current.md to extract validated content");
@@ -243,6 +247,16 @@ pub fn close_session(
     };
 
     // ── Step 2b: Update chapter word count in .ink-state.yml ────────────────
+    // NOTE: if the engine called advance-chapter before session-close (which the
+    // AGENTS.md flow implies when chapter_close_suggested is true), the state here
+    // already reflects chapter N+1 with word_count = 0.  The words_added below are
+    // from the validated section of old current.md (chapter N content), so they are
+    // attributed to chapter N+1 — a slight over-count for the new chapter.
+    // Practical impact is limited (at most ~words_per_session words ≈ 25–30 % of
+    // words_per_chapter), but chapter_close_suggested may fire one session earlier
+    // than expected for chapter N+1.
+    // A clean fix would require passing the active chapter from session-open to
+    // session-close (e.g. via the lock file), which is left as a future improvement.
     info!("Updating chapter word count in .ink-state.yml");
     let words_added = total_word_count.saturating_sub(old_total);
     let mut state = InkState::load(repo)?;
@@ -969,5 +983,70 @@ mod tests {
         let text = "é".repeat(300);
         let anchor = crate::context::extract_anchor(&text, text.len());
         assert_eq!(anchor.chars().count(), 200);
+    }
+
+    // ── update_readme_chapters ────────────────────────────────────────────────
+
+    #[test]
+    fn readme_chapters_updates_chapter_list() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Write Global Material so chapter titles can be resolved
+        let global_dir = tmp.path().join("Global Material");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("Config.yml"),
+            "target_length: 80000\nchapter_count: 3\nchapter_structure: three-act\n\
+             words_per_session: 800\nwords_per_chapter: 3000\n",
+        )
+        .unwrap();
+
+        let readme = concat!(
+            "# My Book\n\n",
+            "<!-- INK:README:CHAPTERS -->\n",
+            "1. **Chapter 1** *(in progress)*\n\n",
+            "---\n",
+            "*Footer content*\n",
+        );
+        std::fs::write(tmp.path().join("README.md"), readme).unwrap();
+
+        update_readme_chapters(tmp.path(), 1, Some(2)).unwrap();
+
+        let updated = std::fs::read_to_string(tmp.path().join("README.md")).unwrap();
+        assert!(
+            updated.contains("<!-- INK:README:CHAPTERS -->"),
+            "marker preserved"
+        );
+        assert!(updated.contains("✓"), "completed chapter marked");
+        assert!(
+            updated.contains("in progress"),
+            "in-progress chapter listed"
+        );
+        assert!(
+            updated.contains("---\n*Footer content*"),
+            "footer preserved"
+        );
+    }
+
+    #[test]
+    fn readme_chapters_no_separator_leaves_file_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // README without the \n--- separator
+        let readme = concat!(
+            "# My Book\n\n",
+            "<!-- INK:README:CHAPTERS -->\n",
+            "1. **Chapter 1** *(in progress)*\n",
+        );
+        std::fs::write(tmp.path().join("README.md"), readme).unwrap();
+
+        // Should return Ok(()) without writing
+        update_readme_chapters(tmp.path(), 1, Some(2)).unwrap();
+
+        let after = std::fs::read_to_string(tmp.path().join("README.md")).unwrap();
+        assert_eq!(
+            after, readme,
+            "file must be unchanged when separator is absent"
+        );
     }
 }
