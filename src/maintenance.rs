@@ -1013,10 +1013,19 @@ mod tests {
         update_readme_chapters(tmp.path(), 1, Some(2)).unwrap();
 
         let updated = std::fs::read_to_string(tmp.path().join("README.md")).unwrap();
-        assert!(updated.contains("<!-- INK:README:CHAPTERS -->"), "marker preserved");
+        assert!(
+            updated.contains("<!-- INK:README:CHAPTERS -->"),
+            "marker preserved"
+        );
         assert!(updated.contains("✓"), "completed chapter marked");
-        assert!(updated.contains("in progress"), "in-progress chapter listed");
-        assert!(updated.contains("---\n*Footer content*"), "footer preserved");
+        assert!(
+            updated.contains("in progress"),
+            "in-progress chapter listed"
+        );
+        assert!(
+            updated.contains("---\n*Footer content*"),
+            "footer preserved"
+        );
     }
 
     #[test]
@@ -1035,6 +1044,9 @@ mod tests {
         update_readme_chapters(tmp.path(), 1, Some(2)).unwrap();
 
         let after = std::fs::read_to_string(tmp.path().join("README.md")).unwrap();
-        assert_eq!(after, readme, "file must be unchanged when separator is absent");
+        assert_eq!(
+            after, readme,
+            "file must be unchanged when separator is absent"
+        );
     }
 }
