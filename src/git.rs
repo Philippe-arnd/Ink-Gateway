@@ -107,7 +107,7 @@ pub fn commit_human_edits(repo: &Path, files: &[String]) -> Result<()> {
 }
 
 pub fn create_snapshot_tag(repo: &Path) -> Result<String> {
-    let tag = format!("ink-{}", Local::now().format("%Y-%m-%d-%H-%M"));
+    let tag = format!("ink-{}", Local::now().format("%Y-%m-%d-%H-%M-%S"));
 
     match run_git(repo, &["tag", &tag]) {
         Ok(_) => {
