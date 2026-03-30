@@ -65,7 +65,7 @@ jobs:
             shasum -a 256 "ink-cli-$TARGET" "ink-gateway-mcp-$TARGET" > "checksums-$TARGET.txt"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binaries-${{ matrix.target }}
           path: |
@@ -80,7 +80,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
 
