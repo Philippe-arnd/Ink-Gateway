@@ -1,14 +1,6 @@
-mod book;
-mod config;
-mod context;
-mod git;
-mod init;
-mod maintenance;
-mod state;
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::io::Read;
+use ink_core::{book, init, maintenance};
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -25,34 +17,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Open a writing session: git sync, load context, output JSON payload
-    SessionOpen {
-        /// Path to the book repository
-        repo_path: PathBuf,
-    },
-    /// Close a writing session: read prose from stdin, write files, push
-    SessionClose {
-        /// Path to the book repository
-        repo_path: PathBuf,
-        /// One-paragraph narrative summary of this session (appended to Summary.md and Changelog)
-        #[arg(long)]
-        summary: Option<String>,
-        /// Human-edited files from the session-open payload (repeatable)
-        #[arg(long = "human-edit")]
-        human_edits: Vec<String>,
-    },
-    /// Mark book as complete and perform final push
-    Complete {
-        /// Path to the book repository
-        repo_path: PathBuf,
-    },
     /// Wipe all book content and allow re-running init (requires confirmation)
     Reset {
-        /// Path to the book repository
-        repo_path: PathBuf,
-    },
-    /// Revert to the state before the last writing session (requires confirmation)
-    Rollback {
         /// Path to the book repository
         repo_path: PathBuf,
     },
@@ -113,32 +79,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::SessionOpen { repo_path } => {
-            let payload = context::session_open(&repo_path)?;
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-        }
-        Commands::SessionClose {
-            repo_path,
-            summary,
-            human_edits,
-        } => {
-            let mut prose = String::new();
-            std::io::stdin()
-                .read_to_string(&mut prose)
-                .context("Failed to read prose from stdin")?;
-            let result =
-                maintenance::close_session(&repo_path, &prose, summary.as_deref(), &human_edits)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Commands::Complete { repo_path } => {
-            let result = maintenance::complete_session(&repo_path)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
         Commands::Reset { repo_path } => {
             init::run_reset(&repo_path)?;
-        }
-        Commands::Rollback { repo_path } => {
-            maintenance::rollback_session(&repo_path)?;
         }
         Commands::Init {
             repo_path,

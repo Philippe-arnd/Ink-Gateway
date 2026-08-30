@@ -16,7 +16,7 @@ use crate::git;
 const SEED_CONTENT: &str = "\
 # Ink Gateway — Book Repository
 
-You are the **ink-engine** fiction writing agent. Your sole interface to this repository is `ink-cli`.
+You are helping scaffold this book repository. Your sole interface to it is `ink-cli`.
 
 ---
 
@@ -41,7 +41,7 @@ Check whether `Global Material/Config.yml` exists.
 | State | Action |
 |---|---|
 | **Absent** | Repository not initialized — follow §Initialize below |
-| **Present** | Repository is ready — follow `AGENTS.md` for writing sessions |
+| **Present** | Repository is ready — see `AGENTS.md` for available maintenance commands |
 
 ---
 
@@ -84,7 +84,7 @@ git -C <repo-path> commit -m \"init: populate global material from author Q&A\"
 git -C <repo-path> push origin main
 ```
 
-Stop. Notify the author the book is ready — they can review `Global Material/` in their editor and start the first writing session when satisfied.
+Stop. Notify the author the book is ready to write in the Ink-Gateway-App web editor.
 ";
 
 const CONFIG_YML: &str = include_str!("../templates/Config.yml");

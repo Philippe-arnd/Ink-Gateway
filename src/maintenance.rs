@@ -1,70 +1,11 @@
-use anyhow::{anyhow, Context, Result};
-use chrono::Local;
-use inquire::Confirm;
-use serde::Serialize;
+use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::info;
 
-use crate::book::{
-    append_to_full_book, check_full_book_format, count_prose_words, strip_author_ink_instructions,
-    strip_engine_markers,
-};
+use crate::book::count_prose_words;
 use crate::config::Config;
-use crate::context::{extract_anchor, ink_re};
 use crate::git;
 use crate::state::InkState;
-
-// ─── Output types ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-pub struct ClosePayload {
-    pub session_word_count: u32,
-    pub expected_words_per_session: u32,
-    pub total_word_count: u32,
-    pub target_length: u32,
-    pub completion_ready: bool,
-    pub current_chapter_word_count: u32,
-    pub status: &'static str,
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Find the byte position of the first author instruction comment `<!-- INK: ` in `content`.
-/// Deliberately does NOT match engine markers `<!-- INK:NEW:` or `<!-- INK:REWORKED:`.
-fn find_first_ink_instruction(content: &str) -> Option<usize> {
-    let mut search_from = 0;
-    while let Some(rel) = content[search_from..].find("<!-- INK:") {
-        let abs = search_from + rel;
-        // Check for the space that distinguishes author instructions from engine markers
-        let after = &content[abs + 9..]; // skip "<!-- INK:"
-        if after.starts_with(' ') {
-            return Some(abs);
-        }
-        search_from = abs + 9;
-    }
-    None
-}
-
-/// Extract author INK instructions from `content`.
-/// Returns (content with all `<!-- INK: ... -->` comments removed, Vec<(anchor, instruction)>).
-/// The mandatory space after `INK:` ensures engine markers (`<!-- INK:NEW: -->`) are never matched.
-fn extract_author_instructions(content: &str) -> (String, Vec<(String, String)>) {
-    let re = ink_re();
-    let mut instructions: Vec<(String, String)> = Vec::new();
-
-    for cap in re.captures_iter(content) {
-        let full_match = cap.get(0).expect("full match");
-        let instruction = cap[1].trim().to_string();
-
-        // Anchor = last 200 chars of text preceding the comment (shared with context.rs)
-        let anchor = extract_anchor(content, full_match.start());
-
-        instructions.push((anchor, instruction));
-    }
-
-    let stripped = re.replace_all(content, "").to_string();
-    (stripped, instructions)
-}
 
 // ─── README helpers ────────────────────────────────────────────────────────────
 
@@ -178,337 +119,12 @@ fn update_readme_status(repo: &Path, new_status: &str) -> Result<()> {
     Ok(())
 }
 
-// ─── session-close ─────────────────────────────────────────────────────────────
-
-pub fn close_session(
-    repo: &Path,
-    prose: &str,
-    summary: Option<&str>,
-    human_edits: &[String],
-) -> Result<ClosePayload> {
-    let lock_path = repo.join(".ink-running");
-
-    // Guard: lock must exist
-    if !lock_path.exists() {
-        return Err(anyhow!("no active session — run session-open first"));
-    }
-
-    let config = Config::load(repo)?;
-    let now = Local::now();
-    let session_word_count = crate::book::count_prose_words(prose);
-
-    // ── Step 1: Read old current.md, split at first INK instruction ──────────
-    info!("Reading Review/current.md to extract validated content");
-    let review_dir = repo.join("Review");
-    let current_md_path = review_dir.join("current.md");
-
-    let old_current = if current_md_path.exists() {
-        std::fs::read_to_string(&current_md_path)
-            .with_context(|| "Failed to read Review/current.md")?
-    } else {
-        String::new()
-    };
-
-    // Everything before the first author INK instruction is validated prose.
-    // The pending section (from the first instruction onwards) is tracked separately:
-    // if the engine skips rework, we carry it forward so instructions aren't silently lost.
-    let (validated, pending_opt) = match find_first_ink_instruction(&old_current) {
-        Some(pos) => (
-            old_current[..pos].trim_end().to_string(),
-            Some(old_current[pos..].trim_start().to_string()),
-        ),
-        None => (old_current.trim_end().to_string(), None), // no instructions → all is validated
-    };
-
-    // ── Step 2: Append validated content to Full_Book.md ────────────────────
-    info!("Appending validated content to Full_Book.md");
-    let book_dir = repo.join("Current version");
-    std::fs::create_dir_all(&book_dir).with_context(|| "Failed to create 'Current version/'")?;
-    let book_path = book_dir.join("Full_Book.md");
-
-    // Strip engine markers before appending — they belong only in current.md.
-    let validated = strip_engine_markers(&validated);
-
-    // append_to_full_book returns (old_words, new_words) from a single file read,
-    // eliminating the separate pre-read that was needed before.
-    let (old_total, total_word_count) = if !validated.trim().is_empty() {
-        append_to_full_book(&book_path, validated.trim(), config.words_per_page)?
-    } else {
-        // Nothing validated: no words added; report current book word count
-        let existing = if book_path.exists() {
-            count_prose_words(
-                &std::fs::read_to_string(&book_path)
-                    .with_context(|| "Failed to read Full_Book.md")?,
-            )
-        } else {
-            0
-        };
-        (existing, existing)
-    };
-
-    // ── Step 2b: Update chapter word count in .ink-state.yml ────────────────
-    // NOTE: if the engine called advance-chapter before session-close (which the
-    // AGENTS.md flow implies when chapter_close_suggested is true), the state here
-    // already reflects chapter N+1 with word_count = 0.  The words_added below are
-    // from the validated section of old current.md (chapter N content), so they are
-    // attributed to chapter N+1 — a slight over-count for the new chapter.
-    // Practical impact is limited (at most ~words_per_session words ≈ 25–30 % of
-    // words_per_chapter), but chapter_close_suggested may fire one session earlier
-    // than expected for chapter N+1.
-    // A clean fix would require passing the active chapter from session-open to
-    // session-close (e.g. via the lock file), which is left as a future improvement.
-    info!("Updating chapter word count in .ink-state.yml");
-    let words_added = total_word_count.saturating_sub(old_total);
-    let mut state = InkState::load(repo)?;
-    state.current_chapter_word_count += words_added;
-    state.save(repo)?;
-
-    // ── Step 3: Write new current.md = engine prose (REWORKED + NEW blocks) ──
-    //
-    // Guard: if old current.md had pending INK instructions but the engine
-    // produced no REWORKED blocks, the rework was silently skipped.
-    // Carry the pending section forward so instructions surface again in the
-    // next session-open payload instead of being permanently discarded.
-    // Strip any author INK instructions the engine may have echoed back — they must
-    // never accumulate in current.md across sessions.
-    let prose_clean = strip_author_ink_instructions(prose);
-
-    let new_current = match pending_opt {
-        Some(ref pending) if !prose.contains("<!-- INK:REWORKED:START -->") => {
-            let instruction_count = ink_re().find_iter(pending).count();
-            tracing::warn!(
-                "Engine produced 0 REWORKED blocks despite {} pending INK instruction(s); \
-                 carrying pending section forward to next session",
-                instruction_count
-            );
-            // Strip stale engine markers from pending before re-appending so they
-            // don't accumulate across sessions (markers belong only in current.md
-            // when freshly generated, not when preserved from a prior session).
-            let pending_clean = strip_engine_markers(pending);
-            format!("{}\n\n{}", prose_clean.trim_end(), pending_clean.trim())
-        }
-        _ => prose_clean,
-    };
-
-    info!("Writing new Review/current.md");
-    std::fs::create_dir_all(&review_dir).with_context(|| "Failed to create Review/")?;
-    std::fs::write(&current_md_path, &new_current)
-        .with_context(|| "Failed to write Review/current.md")?;
-
-    // ── Step 4: Append to Summary.md ─────────────────────────────────────────
-    info!("Appending to Summary.md");
-    let summary_path = repo.join("Global Material").join("Summary.md");
-    let delta_text = summary.map(|s| s.to_string()).unwrap_or_else(|| {
-        format!(
-            "Session {} — {} words written.",
-            now.format("%Y-%m-%d %H:%M"),
-            session_word_count
-        )
-    });
-    let delta = format!("\n\n{}", delta_text.trim());
-    let mut existing_summary = if summary_path.exists() {
-        std::fs::read_to_string(&summary_path).with_context(|| "Failed to read Summary.md")?
-    } else {
-        String::new()
-    };
-    existing_summary.push_str(&delta);
-    std::fs::write(&summary_path, &existing_summary)
-        .with_context(|| "Failed to write Summary.md")?;
-
-    // ── Step 5: Write Changelog entry ────────────────────────────────────────
-    info!("Writing changelog entry");
-    let changelog_dir = repo.join("Changelog");
-    std::fs::create_dir_all(&changelog_dir).with_context(|| "Failed to create Changelog/")?;
-    let changelog_filename = format!("{}.md", now.format("%Y-%m-%d-%H-%M"));
-    let changelog_path = changelog_dir.join(&changelog_filename);
-
-    let mut changelog = format!(
-        "# Session {}\n\n**Words written:** {}\n",
-        now.format("%Y-%m-%d %H:%M"),
-        session_word_count
-    );
-    if !human_edits.is_empty() {
-        changelog.push_str("\n**Human edits:**\n");
-        for edit in human_edits {
-            changelog.push_str(&format!("- {}\n", edit));
-        }
-    }
-    if let Some(s) = summary {
-        changelog.push_str(&format!("\n**Summary:**\n{}\n", s.trim()));
-    }
-
-    std::fs::write(&changelog_path, &changelog)
-        .with_context(|| format!("Failed to write {}", changelog_path.display()))?;
-
-    // ── Step 6: Commit and push ───────────────────────────────────────────────
-    info!("Committing session on draft branch");
-    git::run_git(repo, &["rm", "-f", ".ink-running"])
-        .with_context(|| "Failed to git rm .ink-running")?;
-    git::run_git(repo, &["add", "-A"]).with_context(|| "Failed to git add session files")?;
-    git::run_git(repo, &["commit", "-m", "session: write prose"])
-        .with_context(|| "Failed to commit session files")?;
-    git::run_git(repo, &["push", "origin", "draft"]).with_context(|| "Failed to push draft")?;
-
-    info!("Fast-forward merging draft into main and pushing");
-    git::run_git(repo, &["checkout", "main"]).with_context(|| "Failed to checkout main")?;
-    git::run_git(repo, &["merge", "--ff-only", "draft"])
-        .with_context(|| "Failed to fast-forward merge draft into main")?;
-    git::run_git(repo, &["push", "origin", "main"]).with_context(|| "Failed to push main")?;
-
-    let completion_ready = total_word_count >= (config.target_length as f64 * 0.9) as u32;
-
-    Ok(ClosePayload {
-        session_word_count,
-        expected_words_per_session: config.words_per_session,
-        total_word_count,
-        target_length: config.target_length,
-        completion_ready,
-        current_chapter_word_count: state.current_chapter_word_count,
-        status: "closed",
-    })
-}
-
-// ─── complete ─────────────────────────────────────────────────────────────────
-
-/// Check for pending author INK instructions in current.md.
-/// Returns `needs_revision` JSON if any found, or finalizes and returns `complete` JSON.
-pub fn complete_session(repo: &Path) -> Result<serde_json::Value> {
-    let complete_path = repo.join("COMPLETE");
-
-    // Guard: COMPLETE must not already exist
-    if complete_path.exists() {
-        return Err(anyhow!(
-            "book already complete — COMPLETE marker already exists"
-        ));
-    }
-
-    // Ensure we're on main
-    git::run_git(repo, &["checkout", "main"])
-        .with_context(|| "Failed to checkout main for complete")?;
-
-    // Read current.md
-    let current_md_path = repo.join("Review").join("current.md");
-    let current_content = if current_md_path.exists() {
-        std::fs::read_to_string(&current_md_path)
-            .with_context(|| "Failed to read Review/current.md")?
-    } else {
-        String::new()
-    };
-
-    // Check for pending author INK instructions
-    let (stripped_content, instructions) = extract_author_instructions(&current_content);
-
-    if !instructions.is_empty() {
-        // Pending revisions — engine must run another session loop before finalizing
-        let instructions_json: Vec<serde_json::Value> = instructions
-            .into_iter()
-            .map(|(anchor, instruction)| {
-                serde_json::json!({
-                    "anchor": anchor,
-                    "instruction": instruction,
-                })
-            })
-            .collect();
-
-        return Ok(serde_json::json!({
-            "status": "needs_revision",
-            "current_review": {
-                "content": stripped_content,
-                "instructions": instructions_json,
-            }
-        }));
-    }
-
-    // Format check — ensure Full_Book.md has proper structure before sealing
-    if let Some(format_result) = check_full_book_format(repo)? {
-        return Ok(format_result);
-    }
-
-    // ── No instructions: finalize the book ───────────────────────────────────
-    info!("No pending INK instructions — finalizing book");
-
-    // stripped_content already has INK comments removed; now strip engine markers too.
-    let current_content = strip_engine_markers(&stripped_content);
-
-    // Append entire current.md to Full_Book.md (it's all validated at this point)
-    let config = Config::load(repo)?;
-    let book_dir = repo.join("Current version");
-    std::fs::create_dir_all(&book_dir).with_context(|| "Failed to create 'Current version/'")?;
-    let book_path = book_dir.join("Full_Book.md");
-
-    let total_word_count = if !current_content.trim().is_empty() {
-        let (_, new_total) =
-            append_to_full_book(&book_path, &current_content, config.words_per_page)?;
-        new_total
-    } else if book_path.exists() {
-        let content = std::fs::read_to_string(&book_path)
-            .with_context(|| "Failed to read Full_Book.md for word count")?;
-        count_prose_words(&content)
-    } else {
-        0
-    };
-
-    // Write completion placeholder to current.md
-    let placeholder =
-        "<!-- Book complete. This file is sealed. See Full_Book.md for the final text. -->";
-    std::fs::write(&current_md_path, placeholder)
-        .with_context(|| "Failed to write completion placeholder to Review/current.md")?;
-
-    // Remove stale .ink-running lock if present
-    let lock_path = repo.join(".ink-running");
-    if lock_path.exists() {
-        git::run_git(repo, &["rm", "-f", ".ink-running"])
-            .with_context(|| "Failed to git rm .ink-running")?;
-    }
-
-    // Write COMPLETE marker
-    info!("Writing COMPLETE marker");
-    std::fs::write(&complete_path, "").with_context(|| "Failed to write COMPLETE")?;
-
-    // Update README: mark all chapters ✓ and set final status
-    let state = InkState::load(repo).unwrap_or_default();
-    let chapter_word = if state.current_chapter == 1 {
-        "chapter"
-    } else {
-        "chapters"
-    };
-    let _ = update_readme_chapters(repo, state.current_chapter, None);
-    let _ = update_readme_status(
-        repo,
-        &format!(
-            "Complete — {} {}, {} words",
-            state.current_chapter, chapter_word, total_word_count
-        ),
-    );
-
-    // Commit and push main + draft so both branches reflect the sealed book
-    git::run_git(repo, &["add", "-A"]).with_context(|| "Failed to git add for final seal")?;
-    git::run_git(repo, &["commit", "-m", "book: complete — final seal"])
-        .with_context(|| "Failed to commit completion")?;
-    git::run_git(repo, &["push", "origin", "main"])
-        .with_context(|| "Failed to push main for completion")?;
-
-    // Keep draft in sync — best-effort, not fatal if draft never existed
-    if git::run_git(repo, &["show-ref", "--verify", "refs/heads/draft"]).is_ok() {
-        git::run_git(repo, &["branch", "-f", "draft", "main"])
-            .with_context(|| "Failed to fast-forward draft to main")?;
-        if let Err(e) = git::run_git(repo, &["push", "origin", "draft"]) {
-            tracing::warn!("Could not push draft after completion (non-fatal): {}", e);
-        }
-    }
-
-    Ok(serde_json::json!({
-        "status": "complete",
-        "total_word_count": total_word_count,
-    }))
-}
-
 // ─── advance-chapter ──────────────────────────────────────────────────────────
 
 /// Advance to the next chapter by updating `.ink-state.yml`.
 /// Returns `needs_chapter_outline` if the next chapter file is missing,
 /// or `advanced` with the new chapter content on success.
-/// Does NOT push — session-close handles all pushes.
+/// Does NOT push — the caller decides when to sync.
 pub fn advance_chapter(repo: &Path) -> Result<serde_json::Value> {
     let config = Config::load(repo)?;
     let mut state = InkState::load(repo)?;
@@ -765,9 +381,7 @@ pub fn doctor(repo: &Path) -> Result<serde_json::Value> {
         if draft_exists {
             serde_json::Value::Null
         } else {
-            serde_json::json!(
-                "draft branch not found locally — will be created at next session-open"
-            )
+            serde_json::json!("draft branch not found locally")
         }
     );
 
@@ -784,13 +398,13 @@ pub fn doctor(repo: &Path) -> Result<serde_json::Value> {
             "session_lock",
             !stale,
             serde_json::json!(format!(
-                "lock exists (age: {}m, timeout: {}m) — {}",
+                "lock exists (age: {}m, timeout: {}m){}",
                 age.unwrap_or(-1),
                 timeout,
                 if stale {
-                    "STALE — will be recovered at next session-open"
+                    " — STALE, safe to remove"
                 } else {
-                    "active session in progress"
+                    ""
                 }
             ))
         );
@@ -804,113 +418,11 @@ pub fn doctor(repo: &Path) -> Result<serde_json::Value> {
     }))
 }
 
-// ─── rollback ─────────────────────────────────────────────────────────────────
-
-/// Revert main (and draft) to the snapshot tag created at the start of the
-/// last writing session, undoing all prose generated in that session.
-pub fn rollback_session(repo_path: &Path) -> Result<()> {
-    // Collect all ink-* tags and sort reverse-chronologically.
-    let raw = git::run_git(repo_path, &["tag", "-l", "ink-*"])?;
-    let mut tags: Vec<&str> = raw
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect();
-    tags.sort_by(|a, b| b.cmp(a));
-
-    let target = tags
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("No ink-* snapshot tags found — nothing to roll back"))?;
-
-    println!("\n  Rollback target : {}", target);
-    if let Some(prev) = tags.get(1) {
-        println!("  Previous snapshot: {}", prev);
-    }
-    println!();
-    println!("  This will permanently remove the last session's prose,");
-    println!("  Summary.md entry, and Changelog entry, then force-push.");
-
-    let confirmed = Confirm::new("Confirm rollback?")
-        .with_default(false)
-        .prompt()
-        .with_context(|| "Failed to read confirmation")?;
-
-    if !confirmed {
-        println!("  Rollback cancelled.");
-        return Ok(());
-    }
-
-    // Ensure we're on main before resetting
-    git::run_git(repo_path, &["checkout", "main"]).with_context(|| "Failed to checkout main")?;
-
-    // Hard reset main to the snapshot tag
-    git::run_git(repo_path, &["reset", "--hard", target])
-        .with_context(|| format!("Failed to reset to {}", target))?;
-
-    // Force-push main
-    git::run_git(repo_path, &["push", "--force", "origin", "main"])
-        .with_context(|| "Failed to force-push main")?;
-
-    // Reset draft to main if it exists
-    if git::run_git(repo_path, &["show-ref", "--verify", "refs/heads/draft"]).is_ok() {
-        git::run_git(repo_path, &["branch", "-f", "draft", "main"])
-            .with_context(|| "Failed to reset draft branch")?;
-        git::run_git(repo_path, &["push", "--force", "origin", "draft"])
-            .with_context(|| "Failed to force-push draft")?;
-    }
-
-    println!("\n  Rolled back to {}.", target);
-    println!("  The last session's prose has been removed.");
-    println!("  Run the next session normally when ready.\n");
-
-    Ok(())
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn find_instruction_matches_author_comment() {
-        let content = "Some prose\n<!-- INK: make this better -->\nMore prose";
-        assert!(find_first_ink_instruction(content).is_some());
-    }
-
-    #[test]
-    fn find_instruction_ignores_engine_new_marker() {
-        let content = "<!-- INK:NEW:START -->\nProse\n<!-- INK:NEW:END -->";
-        assert!(find_first_ink_instruction(content).is_none());
-    }
-
-    #[test]
-    fn find_instruction_ignores_engine_reworked_marker() {
-        let content = "<!-- INK:REWORKED:START -->\nProse\n<!-- INK:REWORKED:END -->";
-        assert!(find_first_ink_instruction(content).is_none());
-    }
-
-    #[test]
-    fn find_instruction_skips_engine_markers_to_find_author() {
-        let content = "<!-- INK:NEW:START -->\nProse\n<!-- INK:NEW:END -->\n<!-- INK: fix this -->";
-        let pos = find_first_ink_instruction(content).expect("should find author instruction");
-        assert!(content[pos..].starts_with("<!-- INK: fix this -->"));
-    }
-
-    #[test]
-    fn session_close_guard_returns_err_without_lock() {
-        let tmp = tempfile::tempdir().unwrap();
-        let err = close_session(tmp.path(), "prose", None, &[]).unwrap_err();
-        assert!(err.to_string().contains("no active session"));
-    }
-
-    #[test]
-    fn complete_guard_returns_err_when_already_complete() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("COMPLETE"), "").unwrap();
-        let err = complete_session(tmp.path()).unwrap_err();
-        assert!(err.to_string().contains("already complete"));
-    }
 
     // ── advance-chapter guard helpers ─────────────────────────────────────────
 
@@ -975,14 +487,6 @@ mod tests {
         let min: u32 = (words_per_chapter as f64 * 0.9) as u32; // 2700
         let current_word_count: u32 = 2699;
         assert!(current_word_count < min);
-    }
-
-    #[test]
-    fn anchor_extraction_safe_on_multibyte() {
-        // Ensure extract_anchor doesn't panic on multi-byte characters
-        let text = "é".repeat(300);
-        let anchor = crate::context::extract_anchor(&text, text.len());
-        assert_eq!(anchor.chars().count(), 200);
     }
 
     // ── update_readme_chapters ────────────────────────────────────────────────

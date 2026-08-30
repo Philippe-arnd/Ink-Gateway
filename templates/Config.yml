@@ -2,11 +2,11 @@
 # Copy this file to: Global Material/Config.yml in each book repository.
 # All fields are required. See comments for valid values.
 #
-# NOTE: The AI model is NOT configured here. It is set at the agent gateway
-# level when registering the cron job (e.g., via --model or agent settings).
-# All AI credentials are managed by the agent gateway.
+# NOTE: The AI model is NOT configured here — it's chosen per-user in the
+# Ink-Gateway-App web app (Settings), or per-call if you're driving ink-cli
+# yourself via its MCP server.
 
-# Language the engine must write in (e.g. English, French, Spanish, German).
+# Language to write in (e.g. English, French, Spanish, German).
 language: English
 
 # Target total length of the finished book in words.
@@ -20,34 +20,27 @@ chapter_count: 30
 # Options: linear, multi-pov, vignette
 chapter_structure: linear
 
-# Words to generate per session.
-# Also the size of the rolling context window in current.md.
-# Adjust based on desired pace.
+# Reference length for a single writing pass (e.g. one AI-assisted session in
+# the web app). Not enforced automatically — a guide for pacing.
 words_per_session: 1500
 
-# Number of recent Summary.md paragraphs to include in context each session.
+# Number of recent Summary.md paragraphs to include in context.
 # Keeps input token usage bounded as the book grows.
 summary_context_entries: 5
 
-# Target words per chapter. Used to suggest chapter close (±10% threshold).
-# When session-open detects the chapter is at or above 90% of this target, it sets
-# chapter_close_suggested: true in the payload — the engine then calls advance-chapter.
+# Target words per chapter. `advance-chapter` requires the current chapter to
+# have reached ≥ 90% of this before it will move to the next chapter.
 words_per_chapter: 3000
 
-# Context window of the AI model used for writing sessions, in tokens.
-# session-open uses this to cap how much of Review/current.md is sent in the
-# payload, reserving headroom for the system prompt, Global Material, chapters,
-# summary, and generated prose. Truncation happens at paragraph boundaries.
+# Context window of the AI model used, in tokens. Reserved for future use by
+# context-truncation logic; not currently consulted by any command.
 # Default (200000) targets Claude's standard context window.
-# Adjust for other models: Gemini 1.5 Flash = 1000000, GPT-4o = 128000.
 context_window_tokens: 200000
 
 # Approximate number of words per page for pagination markers in Full_Book.md.
 # Standard paperback: 250. Large print: 150. Dense literary: 300.
 words_per_page: 250
 
-# Maximum wall-clock minutes a session lock is considered valid.
-# If .ink-running is older than this, session-open treats it as a crashed/killed session
-# and removes the stale lock automatically before proceeding.
-# Set this to slightly above the longest session you expect (default: 60).
+# Maximum wall-clock minutes a session lock (.ink-running) is considered
+# valid before `doctor`/`status` report it as stale.
 session_timeout_minutes: 60
