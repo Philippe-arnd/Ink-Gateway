@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use tracing::{info, warn};
 
+use crate::comments::Comment;
 use crate::config::Config;
 use crate::git;
 use crate::state::InkState;
@@ -344,6 +345,51 @@ pub fn load_word_count(repo: &Path, target: u32) -> Result<WordCount> {
     })
 }
 
+// ─── Live editing snapshot (web editor / chat) ─────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct BookContext {
+    pub config: ConfigSnapshot,
+    pub global_material: Vec<FileContent>,
+    pub current_chapter: Option<ChapterInfo>,
+    pub current: String,
+    pub comments: Vec<Comment>,
+    pub word_count: WordCount,
+}
+
+/// Read-only snapshot of everything a browser editor or chat turn needs:
+/// Global Material, the active chapter outline, the live `Review/current.md`
+/// draft, open comment threads, and word counts. Unlike `session_open`, this
+/// performs **no git mutation** — no lock, no snapshot tag, no push — so it's
+/// safe to call on every chat turn or editor load while a human is working,
+/// without colliding with the `.ink-running` lock used by scheduled sessions.
+pub fn get_book_context(repo: &Path) -> Result<BookContext> {
+    let config = Config::load(repo)?;
+    let state = InkState::load(repo)?;
+
+    let global_material = load_global_material(repo, config.summary_context_entries)?;
+    let current_chapter = load_chapter(repo, state.current_chapter, &[])?;
+
+    let review_path = repo.join("Review").join("current.md");
+    let current = if review_path.exists() {
+        std::fs::read_to_string(&review_path).with_context(|| "Failed to read Review/current.md")?
+    } else {
+        String::new()
+    };
+
+    let comments = crate::comments::list_comments(repo)?;
+    let word_count = load_word_count(repo, config.target_length)?;
+
+    Ok(BookContext {
+        config: ConfigSnapshot::new(&config, state.current_chapter),
+        global_material,
+        current_chapter,
+        current,
+        comments,
+        word_count,
+    })
+}
+
 // ─── Main orchestration ───────────────────────────────────────────────────────
 
 pub fn session_open(repo: &Path) -> Result<SessionPayload> {
@@ -592,4 +638,56 @@ pub fn session_open(repo: &Path) -> Result<SessionPayload> {
         chapter_progress_pct,
         session_type,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_test_config(dir: &std::path::Path) {
+        let global_dir = dir.join("Global Material");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("Config.yml"),
+            "target_length: 80000\nchapter_count: 10\nchapter_structure: three-act\n\
+             words_per_session: 800\n",
+        )
+        .unwrap();
+        std::fs::write(global_dir.join("Soul.md"), "Wry, dry narrator.").unwrap();
+    }
+
+    #[test]
+    fn get_book_context_reads_full_snapshot_without_git_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_config(tmp.path());
+
+        let chapters_dir = tmp.path().join("Chapters material");
+        std::fs::create_dir_all(&chapters_dir).unwrap();
+        std::fs::write(chapters_dir.join("Chapter_01.md"), "Outline for chapter one.").unwrap();
+
+        let review_dir = tmp.path().join("Review");
+        std::fs::create_dir_all(&review_dir).unwrap();
+        std::fs::write(review_dir.join("current.md"), "Draft prose in progress.").unwrap();
+
+        let ctx = get_book_context(tmp.path()).unwrap();
+
+        assert_eq!(ctx.current, "Draft prose in progress.");
+        assert!(ctx.global_material.iter().any(|f| f.filename == "Soul.md"));
+        assert!(ctx.current_chapter.is_some());
+        assert!(ctx.comments.is_empty());
+        assert_eq!(ctx.word_count.target, 80000);
+
+        // Purely read-only: no session lock created as a side effect.
+        assert!(!tmp.path().join(".ink-running").exists());
+    }
+
+    #[test]
+    fn get_book_context_missing_current_md_is_empty_not_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_config(tmp.path());
+
+        let ctx = get_book_context(tmp.path()).unwrap();
+        assert_eq!(ctx.current, "");
+        assert!(ctx.current_chapter.is_none());
+    }
 }

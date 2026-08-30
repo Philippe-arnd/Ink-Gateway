@@ -1,15 +1,4 @@
-// The MCP server compiles all shared modules but intentionally exposes only a
-// subset of their functions. Suppress dead-code lint for this binary target.
-#![allow(dead_code)]
-
-mod book;
-mod config;
-mod context;
-mod git;
-mod init;
-mod maintenance;
-mod state;
-
+use ink_core::{book, context, init, maintenance};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};

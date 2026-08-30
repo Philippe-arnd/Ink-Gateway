@@ -1,13 +1,6 @@
-mod book;
-mod config;
-mod context;
-mod git;
-mod init;
-mod maintenance;
-mod state;
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use ink_core::{book, context, init, maintenance};
 use std::io::Read;
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
