@@ -1,15 +1,11 @@
-//! Fine-grained live edits to `Review/current.md`.
-//!
-//! `session-open`/`session-close` operate on the whole rolling window at once
-//! — right for a scheduled writing session, too coarse for a browser editor
-//! where a human or a chat agent changes a few words at a time. These
-//! functions read/write the same file at a character position or range and
-//! commit locally (no push — callers batch pushes, same pattern as
-//! `maintenance::advance_chapter`).
+//! Fine-grained live edits to `Review/current.md`, for a browser editor or
+//! chat agent changing a few words at a time (as opposed to the coarse,
+//! whole-file rewrites the old scheduled-session flow used to do). Each
+//! function commits locally — no push — callers batch pushes, same pattern
+//! as `maintenance::advance_chapter`.
 //!
 //! Positions are character offsets, not byte offsets, so multi-byte UTF-8
-//! text never causes a boundary panic (same reasoning as
-//! `context::extract_anchor`).
+//! text never causes a boundary panic.
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};

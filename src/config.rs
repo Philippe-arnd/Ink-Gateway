@@ -30,7 +30,8 @@ fn default_context_window_tokens() -> u32 {
 #[serde(rename_all = "snake_case")]
 pub struct Config {
     #[serde(default = "default_language")]
-    #[allow(dead_code)] // read by the ink-engine agent via JSON, not by Rust code
+    #[allow(dead_code)]
+    // surfaced in get_book_context JSON for the web app/consumers, not read by Rust code
     pub language: String,
     pub target_length: u32,
     pub chapter_count: u32,

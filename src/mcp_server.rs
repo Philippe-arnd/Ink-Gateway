@@ -1,4 +1,4 @@
-use ink_core::{book, context, init, maintenance};
+use ink_core::{book, init, maintenance};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
@@ -59,61 +59,6 @@ impl RpcResponse {
 fn tools_list() -> Value {
     json!({
         "tools": [
-            {
-                "name": "session_open",
-                "description": "Open a writing session: pre-flight git sync, snapshot tag, draft branch, load all book context. Returns a full JSON payload ready for the writing engine.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "repo_path": {
-                            "type": "string",
-                            "description": "Absolute path to the book repository"
-                        }
-                    },
-                    "required": ["repo_path"]
-                }
-            },
-            {
-                "name": "session_close",
-                "description": "Close a writing session: split current.md (validated prose → Full_Book.md, new prose → current.md), update Summary.md, write Changelog entry, push. Returns word counts and completion_ready flag.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "repo_path": {
-                            "type": "string",
-                            "description": "Absolute path to the book repository"
-                        },
-                        "prose": {
-                            "type": "string",
-                            "description": "New prose for this session — reworked blocks and new continuation, wrapped in INK:REWORKED/INK:NEW markers"
-                        },
-                        "summary": {
-                            "type": "string",
-                            "description": "One-paragraph narrative summary of this session"
-                        },
-                        "human_edits": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Filenames the human edited between sessions (from session_open payload)"
-                        }
-                    },
-                    "required": ["repo_path", "prose"]
-                }
-            },
-            {
-                "name": "complete",
-                "description": "Attempt to finalise the book. If current.md contains pending INK instructions, returns needs_revision. If clean, appends to Full_Book.md, writes the COMPLETE marker, and pushes.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "repo_path": {
-                            "type": "string",
-                            "description": "Absolute path to the book repository"
-                        }
-                    },
-                    "required": ["repo_path"]
-                }
-            },
             {
                 "name": "advance_chapter",
                 "description": "Advance to the next chapter. Verifies the next chapter outline file exists (returns needs_chapter_outline if missing), updates .ink-state.yml, and commits. Does NOT push.",
@@ -194,7 +139,7 @@ fn tools_list() -> Value {
             },
             {
                 "name": "doctor",
-                "description": "Validate the book repository: checks required files, Config.yml validity, git remote configuration and reachability, draft branch, and session lock state. Returns a list of named checks each with ok/detail. Run this before registering a cron job.",
+                "description": "Validate the book repository: checks required files, Config.yml validity, git remote configuration and reachability, draft branch, and session lock state. Returns a list of named checks each with ok/detail.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -238,34 +183,6 @@ fn call_tool(name: &str, args: &Value) -> Result<Value, String> {
         .ok_or("Missing required parameter: repo_path")?;
 
     match name {
-        "session_open" => {
-            let payload = context::session_open(&repo_path).map_err(|e| e.to_string())?;
-            serde_json::to_value(payload).map_err(|e| e.to_string())
-        }
-
-        "session_close" => {
-            let prose = args
-                .get("prose")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing required parameter: prose")?;
-            let summary = args.get("summary").and_then(|v| v.as_str());
-            let human_edits: Vec<String> = args
-                .get("human_edits")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let payload = maintenance::close_session(&repo_path, prose, summary, &human_edits)
-                .map_err(|e| e.to_string())?;
-            serde_json::to_value(payload).map_err(|e| e.to_string())
-        }
-
-        "complete" => maintenance::complete_session(&repo_path).map_err(|e| e.to_string()),
-
         "advance_chapter" => maintenance::advance_chapter(&repo_path).map_err(|e| e.to_string()),
 
         "init" => {
