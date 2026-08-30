@@ -153,7 +153,13 @@ pub struct VersionEntry {
 pub fn list_versions(repo: &Path, rel_path: &str) -> Result<Vec<VersionEntry>> {
     let output = run_git(
         repo,
-        &["log", "--follow", "--format=%H%x1f%aI%x1f%s", "--", rel_path],
+        &[
+            "log",
+            "--follow",
+            "--format=%H%x1f%aI%x1f%s",
+            "--",
+            rel_path,
+        ],
     )
     .with_context(|| format!("Failed to list git history for {}", rel_path))?;
 
@@ -192,7 +198,11 @@ pub fn restore_version(repo: &Path, rel_path: &str, commit: &str) -> Result<()> 
     run_git(repo, &["add", rel_path]).with_context(|| "Failed to git add restored file")?;
     run_git(
         repo,
-        &["commit", "-m", &format!("restore: {} to {}", rel_path, commit)],
+        &[
+            "commit",
+            "-m",
+            &format!("restore: {} to {}", rel_path, commit),
+        ],
     )
     .with_context(|| "Failed to commit restore")?;
 

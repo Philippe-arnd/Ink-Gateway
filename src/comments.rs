@@ -46,14 +46,17 @@ fn save_all(repo: &Path, comments: &[Comment]) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
-    let content = serde_yaml::to_string(comments).with_context(|| "Failed to serialize comments")?;
+    let content =
+        serde_yaml::to_string(comments).with_context(|| "Failed to serialize comments")?;
     std::fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))
 }
 
 fn commit(repo: &Path, message: &str) -> Result<()> {
     git::run_git(repo, &["add", "Comments/current.yml"])
         .with_context(|| "Failed to git add Comments/current.yml")?;
-    git::run_git(repo, &["commit", "-m", message]).with_context(|| "Failed to commit comment change")
+    git::run_git(repo, &["commit", "-m", message])
+        .with_context(|| "Failed to commit comment change")?;
+    Ok(())
 }
 
 /// List all comment threads (open and resolved) anchored to `Review/current.md`.

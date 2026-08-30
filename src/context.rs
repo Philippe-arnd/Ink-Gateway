@@ -663,7 +663,11 @@ mod tests {
 
         let chapters_dir = tmp.path().join("Chapters material");
         std::fs::create_dir_all(&chapters_dir).unwrap();
-        std::fs::write(chapters_dir.join("Chapter_01.md"), "Outline for chapter one.").unwrap();
+        std::fs::write(
+            chapters_dir.join("Chapter_01.md"),
+            "Outline for chapter one.",
+        )
+        .unwrap();
 
         let review_dir = tmp.path().join("Review");
         std::fs::create_dir_all(&review_dir).unwrap();
