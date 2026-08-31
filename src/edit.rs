@@ -76,6 +76,44 @@ pub fn rewrite_range(repo: &Path, start: usize, end: usize, content: &str) -> Re
     write_current(repo, &new_content, "edit: rewrite range")
 }
 
+/// The only paths `write_foundation_file` may touch — not client-controlled,
+/// so a tool call can never be pointed at an arbitrary file in the repo.
+pub const FOUNDATION_PATHS: &[&str] = &[
+    "Global Material/Soul.md",
+    "Global Material/Characters.md",
+    "Global Material/Outline.md",
+    "Global Material/Lore.md",
+    "Chapters material/Chapter_01.md",
+];
+
+/// Overwrite one allow-listed foundational file with `content`, committing
+/// locally (no push) — same write→add→commit shape as `write_current`,
+/// generalized to a path from `FOUNDATION_PATHS` instead of the hardcoded
+/// `Review/current.md`.
+pub fn write_foundation_file(repo: &Path, rel_path: &str, content: &str, message: &str) -> Result<Value> {
+    anyhow::ensure!(
+        FOUNDATION_PATHS.contains(&rel_path),
+        "{} is not an allow-listed foundational file",
+        rel_path
+    );
+
+    let path = repo.join(rel_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    std::fs::write(&path, content)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+
+    git::run_git(repo, &["add", rel_path]).with_context(|| format!("Failed to git add {rel_path}"))?;
+    git::run_git(repo, &["commit", "-m", message]).with_context(|| "Failed to commit foundation write")?;
+
+    Ok(json!({
+        "word_count": count_prose_words(content),
+        "char_count": content.chars().count(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +191,36 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
         assert!(insert_text(tmp.path(), 0, "text").is_ok());
+    }
+
+    #[test]
+    fn write_foundation_file_rejects_non_allowlisted_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+
+        let err = write_foundation_file(tmp.path(), "Review/current.md", "x", "msg").unwrap_err();
+        assert!(err.to_string().contains("not an allow-listed"));
+    }
+
+    #[test]
+    fn write_foundation_file_writes_and_commits() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+
+        let result = write_foundation_file(
+            tmp.path(),
+            "Global Material/Soul.md",
+            "A richer soul.",
+            "expand: Soul.md",
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(tmp.path().join("Global Material/Soul.md")).unwrap();
+        assert_eq!(content, "A richer soul.");
+        assert_eq!(result["word_count"], 3);
+        assert_eq!(result["char_count"], 14);
+
+        let log = git::run_git(tmp.path(), &["log", "-1", "--format=%s"]).unwrap();
+        assert_eq!(log, "expand: Soul.md");
     }
 }
