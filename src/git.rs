@@ -108,6 +108,19 @@ pub fn restore_version(repo: &Path, rel_path: &str, commit: &str) -> Result<()> 
     Ok(())
 }
 
+/// Paths that differ between `tag` and current HEAD — every file a session
+/// touched since its snapshot tag. Backs the web app's multi-file session
+/// diff view.
+pub fn changed_files(repo: &Path, tag: &str) -> Result<Vec<String>> {
+    let output = run_git(repo, &["diff", "--name-only", tag, "HEAD"])
+        .with_context(|| format!("Failed to diff against tag {}", tag))?;
+    Ok(output
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +182,31 @@ mod tests {
         let versions = list_versions(tmp.path(), "current.md").unwrap();
         assert_eq!(versions.len(), 3, "restore must add a commit, not rewrite");
         assert!(versions[0].message.starts_with("restore:"));
+    }
+
+    #[test]
+    fn changed_files_lists_paths_touched_since_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        commit_file(tmp.path(), "a.md", "v1", "seed a");
+        let tag = create_snapshot_tag(tmp.path()).unwrap();
+        commit_file(tmp.path(), "a.md", "v2", "change a");
+        commit_file(tmp.path(), "b.md", "new", "add b");
+
+        let files = changed_files(tmp.path(), &tag).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.contains(&"a.md".to_string()));
+        assert!(files.contains(&"b.md".to_string()));
+    }
+
+    #[test]
+    fn changed_files_empty_when_nothing_changed_since_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        commit_file(tmp.path(), "a.md", "v1", "seed a");
+        let tag = create_snapshot_tag(tmp.path()).unwrap();
+
+        let files = changed_files(tmp.path(), &tag).unwrap();
+        assert!(files.is_empty());
     }
 }
