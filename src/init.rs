@@ -130,6 +130,99 @@ fn fill(template: &str, title: &str, author: &str) -> String {
         .replace("{{AUTHOR}}", author)
 }
 
+/// The 13 onboarding questions, in order. Shared by `run_init` (TUI + `--agent`
+/// JSON payload) and any headless caller (e.g. a web API) that needs the list
+/// before a `repo_path`/title/author exist yet.
+pub fn question_list() -> Vec<Question> {
+    vec![
+        // ── Language ──────────────────────────────────────────────────────────
+        Question {
+            question: "What language should the engine write in?",
+            hint: "e.g. English, French, Spanish, German — use the full language name",
+            target_file: "Global Material/Config.yml",
+            options: None,
+        },
+        // ── Book Format ───────────────────────────────────────────────────────
+        Question {
+            question: "What type of book are you writing?",
+            hint: "Flash fiction: ~1–5 pages · Short story: ~5–30 pages · Novel: ~150–400 pages",
+            target_file: "Global Material/Config.yml",
+            options: Some(vec!["Flash fiction", "Short story", "Novel"]),
+        },
+        Question {
+            question: "How many pages should the finished book be?",
+            hint: "Flash fiction: 5 · Short story: 20 · Novel: 250 — each page ≈ 250 words",
+            target_file: "Global Material/Config.yml",
+            options: None,
+        },
+        Question {
+            question: "How many pages should the engine write per session?",
+            hint: "Flash fiction: 2 · Short story: 3 · Novel: 6 — one session runs on schedule",
+            target_file: "Global Material/Config.yml",
+            options: None,
+        },
+        // ── Voice & Style ──────────────────────────────────────────────────────
+        Question {
+            question: "What is the genre and overall tone?",
+            hint: "e.g. Dark fantasy with literary prose, melancholic and immersive",
+            target_file: "Global Material/Soul.md",
+            options: None,
+        },
+        Question {
+            question: "What is the narrator perspective and tense?",
+            hint: "e.g. Third-person limited, past tense, close to the protagonist",
+            target_file: "Global Material/Soul.md",
+            options: None,
+        },
+        // ── Characters ─────────────────────────────────────────────────────────
+        Question {
+            question: "Who are the Characters? Give names, defining traits and relations.",
+            hint: "e.g. Mara, a disgraced soldier haunted by a massacre she survived",
+            target_file: "Global Material/Characters.md",
+            options: None,
+        },
+        Question {
+            question: "Who or what is the main antagonist or obstacle?",
+            hint: "e.g. The Conclave, a religious order that controls all magic",
+            target_file: "Global Material/Characters.md",
+            options: None,
+        },
+        // ── Plot Arc ───────────────────────────────────────────────────────────
+        Question {
+            question: "How does the story open? What kicks it off?",
+            hint: "1-2 sentences — the inciting event that sets everything in motion",
+            target_file: "Global Material/Outline.md",
+            options: None,
+        },
+        Question {
+            question: "What is the midpoint turning point?",
+            hint: "1-2 sentences — the moment that changes everything for the protagonist",
+            target_file: "Global Material/Outline.md",
+            options: None,
+        },
+        Question {
+            question: "How does the story end?",
+            hint: "1-2 sentences — the resolution and what the protagonist gains or loses",
+            target_file: "Global Material/Outline.md",
+            options: None,
+        },
+        // ── World & Setting ────────────────────────────────────────────────────
+        Question {
+            question: "Describe the world and setting.",
+            hint: "e.g. A crumbling empire on the edge of a magical desert, post-industrial era",
+            target_file: "Global Material/Lore.md",
+            options: None,
+        },
+        // ── Chapter 1 ──────────────────────────────────────────────────────────
+        Question {
+            question: "What happens in Chapter 1? What should the reader feel by the end?",
+            hint: "Key scene(s) and the emotional note the chapter closes on",
+            target_file: "Chapters material/Chapter_01.md",
+            options: None,
+        },
+    ]
+}
+
 pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPayload> {
     // Guard: already initialized
     let config_path = repo_path.join("Global Material/Config.yml");
@@ -218,100 +311,12 @@ pub fn run_init(repo_path: &Path, title: &str, author: &str) -> Result<InitPaylo
 
     git_commit_and_push(repo_path)?;
 
-    let questions = vec![
-        // ── Language ──────────────────────────────────────────────────────────
-        Question {
-            question: "What language should the engine write in?",
-            hint: "e.g. English, French, Spanish, German — use the full language name",
-            target_file: "Global Material/Config.yml",
-            options: None,
-        },
-        // ── Book Format ───────────────────────────────────────────────────────
-        Question {
-            question: "What type of book are you writing?",
-            hint: "Flash fiction: ~1–5 pages · Short story: ~5–30 pages · Novel: ~150–400 pages",
-            target_file: "Global Material/Config.yml",
-            options: Some(vec!["Flash fiction", "Short story", "Novel"]),
-        },
-        Question {
-            question: "How many pages should the finished book be?",
-            hint: "Flash fiction: 5 · Short story: 20 · Novel: 250 — each page ≈ 250 words",
-            target_file: "Global Material/Config.yml",
-            options: None,
-        },
-        Question {
-            question: "How many pages should the engine write per session?",
-            hint: "Flash fiction: 2 · Short story: 3 · Novel: 6 — one session runs on schedule",
-            target_file: "Global Material/Config.yml",
-            options: None,
-        },
-        // ── Voice & Style ──────────────────────────────────────────────────────
-        Question {
-            question: "What is the genre and overall tone?",
-            hint: "e.g. Dark fantasy with literary prose, melancholic and immersive",
-            target_file: "Global Material/Soul.md",
-            options: None,
-        },
-        Question {
-            question: "What is the narrator perspective and tense?",
-            hint: "e.g. Third-person limited, past tense, close to the protagonist",
-            target_file: "Global Material/Soul.md",
-            options: None,
-        },
-        // ── Characters ─────────────────────────────────────────────────────────
-        Question {
-            question: "Who are the Characters? Give names, defining traits and relations.",
-            hint: "e.g. Mara, a disgraced soldier haunted by a massacre she survived",
-            target_file: "Global Material/Characters.md",
-            options: None,
-        },
-        Question {
-            question: "Who or what is the main antagonist or obstacle?",
-            hint: "e.g. The Conclave, a religious order that controls all magic",
-            target_file: "Global Material/Characters.md",
-            options: None,
-        },
-        // ── Plot Arc ───────────────────────────────────────────────────────────
-        Question {
-            question: "How does the story open? What kicks it off?",
-            hint: "1-2 sentences — the inciting event that sets everything in motion",
-            target_file: "Global Material/Outline.md",
-            options: None,
-        },
-        Question {
-            question: "What is the midpoint turning point?",
-            hint: "1-2 sentences — the moment that changes everything for the protagonist",
-            target_file: "Global Material/Outline.md",
-            options: None,
-        },
-        Question {
-            question: "How does the story end?",
-            hint: "1-2 sentences — the resolution and what the protagonist gains or loses",
-            target_file: "Global Material/Outline.md",
-            options: None,
-        },
-        // ── World & Setting ────────────────────────────────────────────────────
-        Question {
-            question: "Describe the world and setting.",
-            hint: "e.g. A crumbling empire on the edge of a magical desert, post-industrial era",
-            target_file: "Global Material/Lore.md",
-            options: None,
-        },
-        // ── Chapter 1 ──────────────────────────────────────────────────────────
-        Question {
-            question: "What happens in Chapter 1? What should the reader feel by the end?",
-            hint: "Key scene(s) and the emotional note the chapter closes on",
-            target_file: "Chapters material/Chapter_01.md",
-            options: None,
-        },
-    ];
-
     Ok(InitPayload {
         status: "initialized",
         title: title.to_string(),
         author: author.to_string(),
         files_created,
-        questions,
+        questions: question_list(),
     })
 }
 
@@ -616,8 +621,7 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
         return Ok(());
     }
 
-    write_answers_to_files(repo_path, &answers)?;
-    commit_qa_answers(repo_path)?;
+    submit_qa_answers(repo_path, &answers)?;
 
     println!();
     println!("  Book is ready.");
@@ -625,6 +629,18 @@ pub fn run_interactive_qa(repo_path: &Path, payload: &InitPayload) -> Result<()>
     println!();
 
     Ok(())
+}
+
+/// Non-interactive equivalent of the tail of `run_interactive_qa`: write the
+/// given answers to their target files and commit. Used by both the TUI path
+/// above and any headless caller (e.g. a web API) that collected answers
+/// through its own UI — one write+commit code path either way.
+///
+/// `answers` are `(question_index, answer_text)` pairs, index matching the
+/// position in `question_list()` (0-based).
+pub fn submit_qa_answers(repo_path: &Path, answers: &[(usize, String)]) -> Result<()> {
+    write_answers_to_files(repo_path, answers)?;
+    commit_qa_answers(repo_path)
 }
 
 /// Aggregate answers (by question index) and write them as structured markdown
