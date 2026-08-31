@@ -90,7 +90,12 @@ pub const FOUNDATION_PATHS: &[&str] = &[
 /// locally (no push) — same write→add→commit shape as `write_current`,
 /// generalized to a path from `FOUNDATION_PATHS` instead of the hardcoded
 /// `Review/current.md`.
-pub fn write_foundation_file(repo: &Path, rel_path: &str, content: &str, message: &str) -> Result<Value> {
+pub fn write_foundation_file(
+    repo: &Path,
+    rel_path: &str,
+    content: &str,
+    message: &str,
+) -> Result<Value> {
     anyhow::ensure!(
         FOUNDATION_PATHS.contains(&rel_path),
         "{} is not an allow-listed foundational file",
@@ -105,8 +110,10 @@ pub fn write_foundation_file(repo: &Path, rel_path: &str, content: &str, message
     std::fs::write(&path, content)
         .with_context(|| format!("Failed to write {}", path.display()))?;
 
-    git::run_git(repo, &["add", rel_path]).with_context(|| format!("Failed to git add {rel_path}"))?;
-    git::run_git(repo, &["commit", "-m", message]).with_context(|| "Failed to commit foundation write")?;
+    git::run_git(repo, &["add", rel_path])
+        .with_context(|| format!("Failed to git add {rel_path}"))?;
+    git::run_git(repo, &["commit", "-m", message])
+        .with_context(|| "Failed to commit foundation write")?;
 
     Ok(json!({
         "word_count": count_prose_words(content),
