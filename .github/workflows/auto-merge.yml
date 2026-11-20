@@ -29,7 +29,7 @@ jobs:
         Test & Lint
       merge-method: 'squash'
       base-branch: 'main'
-      block-label: 'major-update'
+      block-label: ''
       file-issue-on-failure: true
       triggering-conclusion: ${{ github.event.workflow_run.conclusion }}
       triggering-branch: ${{ github.event.workflow_run.head_branch }}
