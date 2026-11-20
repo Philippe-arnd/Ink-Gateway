@@ -26,7 +26,7 @@ jobs:
     uses: Philippe-arnd/reusable-workflow-vibecoded/.github/workflows/reusable-auto-merge.yml@main
     with:
       required-checks: |
-        CI / Test & Lint
+        Test & Lint
       merge-method: 'squash'
       base-branch: 'main'
       block-label: 'major-update'
